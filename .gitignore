@@ -1,5 +1,7 @@
 .git/
 .idea/
-._pycache_/
+.__pycache__/
+__pycache__/
+__pycache__
 data/
 venv/
