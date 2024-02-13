@@ -165,6 +165,8 @@ def back_test(bt):
     # print(len(big[big.dinner==1])/len(big))
 
 def run(season, week, lookback):
+    if not os.path.exists('data/stats'): os.makedirs('data/stats')
+
     if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
         df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
     else:
@@ -176,17 +178,19 @@ def run(season, week, lookback):
 
 
 if __name__ == '__main__':
-    data_pullson.pull_sched(range(1999, 2024))
-    data_pullson.pull_pbp([2023])
+    szns = range(1999,2024)
+    # data_pullson.pull_sched(szns)
+    # data_pullson.pull_pbp(szns)
+    # data_pullson.pull_ngs(szns)
 
     season = 2023
     week = 22
-    lookback = 20
+    lookback = 30
 
-    # pull_bt(30)
-    # back_test(30)
+    pull_bt(30)
+    back_test(30)
 
     pred = run(season, week, lookback).round(1)
 
-    h_to_the_tml(pred, season, week, lookback)
-
+    # h_to_the_tml(pred, season, week, lookback)
+    print(tabulate(pred,headers='keys'))
