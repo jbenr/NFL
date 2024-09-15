@@ -10,6 +10,8 @@ import data_crunchski_2
 import data_pullson
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+pd.set_option('display.max_columns', None)
+
 
 def h_to_the_tml(pred, season, week, lookback):
     lines = data_pullson.pull_odds()
@@ -165,8 +167,6 @@ def back_test(bt):
     # print(len(big[big.dinner==1])/len(big))
 
 def run(season, week, lookback):
-    if not os.path.exists('data/stats'): os.makedirs('data/stats')
-
     if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
         df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
     else:
@@ -178,19 +178,22 @@ def run(season, week, lookback):
 
 
 if __name__ == '__main__':
-    szns = range(1999,2024)
-    # data_pullson.pull_sched(szns)
-    # data_pullson.pull_pbp(szns)
-    # data_pullson.pull_ngs(szns)
+    # data_pullson.pull_sched(range(1999, 2025))
+    # data_pullson.pull_pbp([2023,2024])
+    df_24 = pd.read_parquet('data/pbp/pbp_2024.parquet')
+    print(tabulate(df_24.head(4),tablefmt=tabulate_formats[3],headers='keys'))
+    df_23 = pd.read_parquet('data/pbp/pbp_2023.parquet')
+    print(tabulate(df_23.head(4),tablefmt=tabulate_formats[3],headers='keys'))
 
-    season = 2023
-    week = 22
-    lookback = 30
 
-    pull_bt(30)
-    back_test(30)
+    season = 2024
+    week = 2
+    lookback = 20
+
+    # pull_bt(30)
+    # back_test(30)
 
     pred = run(season, week, lookback).round(1)
 
-    # h_to_the_tml(pred, season, week, lookback)
-    print(tabulate(pred,headers='keys'))
+    h_to_the_tml(pred, season, week, lookback)
+

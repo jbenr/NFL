@@ -8,12 +8,15 @@ from tabulate import tabulate
 
 def pull_sched(szns):
     if not os.path.exists('data'): os.makedirs('data')
-    nfl.import_schedules(szns).to_parquet('data/sched.parquet')
+    sched = nfl.import_schedules(szns)
+    sched.to_parquet('data/sched.parquet')
+
 
 def pull_pbp(szns):
     if not os.path.exists('data/pbp'): os.makedirs('data/pbp')
     for szn in szns:
-        nfl.import_pbp_data([szn]).to_parquet(f'data/pbp/pbp_{szn}.parquet')
+        dat = nfl.import_pbp_data([szn], cache=False, alt_path=None)
+        dat.to_parquet(f'data/pbp/pbp_{szn}.parquet')
     # df = pd.read_parquet(f'data/pbp/pbp_{szns.max()}.parquet')
     # print(f'Latest data from {szns.max()}: week {df[df.season==szns.max()].week.max()}\n'
     #       f'{df[(df.season==szns.max())&(df.week==df.week.max())].groupby(["away_team","home_team"]).agg("count").index.tolist()}')

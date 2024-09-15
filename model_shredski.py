@@ -19,9 +19,6 @@ tf.get_logger().setLevel(logging.ERROR)
 
 def modelo(data, season, week):
     dat = data.copy()
-    for col in dat.columns:
-        if pd.api.types.is_numeric_dtype(dat[col]):
-            dat[col] = dat[col].astype('float32')
     dat.loc[:,'result'] = dat['away_score']-dat['home_score']
 
     target = 'result'
@@ -55,14 +52,14 @@ def modelo(data, season, week):
     def create_model():
         model = Sequential()
         model.add(Dropout(0.1))
-        model.add(Dense(X.shape[1], input_dim=X.shape[1], activation='tanh'))
+        model.add(Dense(X.shape[1], input_dim=X.shape[1], activation='elu'))
         # model.add(Dropout(0.1))
-        model.add(Dense((X.shape[1] + 1) // 2, activation='relu'))
-        model.add(Dense((X.shape[1] + 1) // 3, activation='relu'))
+        model.add(Dense((X.shape[1] + 1) // 2, activation='elu'))
+        model.add(Dense((X.shape[1] + 1) // 3, activation='elu'))
         model.add(Dense(1, activation='linear'))
         return model
 
-    iterations = 10
+    iterations = 40
     lst = []
     tf.keras.backend.clear_session()
     for i in range(iterations):
@@ -70,7 +67,7 @@ def modelo(data, season, week):
         opt = keras.optimizers.Adam(amsgrad=True)
         # model.compile(optimizer=opt, loss=sign_penalty, metrics=['accuracy'])
         model.compile(optimizer=opt, loss=sign_penalty)
-        reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.8, patience=5, mode='auto')
+        reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, mode='auto')
         model.fit(X, Y, epochs=100, callbacks=[reduce_lr])
 
         train_preds = model.predict(X)
