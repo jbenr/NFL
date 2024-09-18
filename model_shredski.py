@@ -59,7 +59,7 @@ def modelo(data, season, week):
         model.add(Dense(1, activation='linear'))
         return model
 
-    iterations = 40
+    iterations = 100
     lst = []
     tf.keras.backend.clear_session()
     for i in range(iterations):

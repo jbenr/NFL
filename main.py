@@ -171,6 +171,7 @@ def run(season, week, lookback):
         df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
     else:
         df = data_crunchski_2.prep_test_train(season, week, lookback)
+        if not os.path.exists('data/stats'): os.makedirs('data/stats')
         df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
 
     pred = model_shredski.modelo(df, season, week)
@@ -178,16 +179,15 @@ def run(season, week, lookback):
 
 
 if __name__ == '__main__':
-    # data_pullson.pull_sched(range(1999, 2025))
-    # data_pullson.pull_pbp([2023,2024])
-    df_24 = pd.read_parquet('data/pbp/pbp_2024.parquet')
-    print(tabulate(df_24.head(4),tablefmt=tabulate_formats[3],headers='keys'))
-    df_23 = pd.read_parquet('data/pbp/pbp_2023.parquet')
-    print(tabulate(df_23.head(4),tablefmt=tabulate_formats[3],headers='keys'))
+    data_pullson.pull_sched(range(1999, 2025))
+    data_pullson.pull_pbp([2024])
+    data_pullson.pull_ngs(range(1999, 2025))
 
+    df = pd.read_parquet('data/ngs_passing.parquet')
+    print(tabulate(df.tail(15),headers='keys'))
 
     season = 2024
-    week = 2
+    week = 3
     lookback = 20
 
     # pull_bt(30)

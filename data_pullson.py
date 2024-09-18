@@ -15,8 +15,23 @@ def pull_sched(szns):
 def pull_pbp(szns):
     if not os.path.exists('data/pbp'): os.makedirs('data/pbp')
     for szn in szns:
-        dat = nfl.import_pbp_data([szn], cache=False, alt_path=None)
-        dat.to_parquet(f'data/pbp/pbp_{szn}.parquet')
+        try:
+            dat = nfl.import_pbp_data([szn], cache=False, alt_path=None)
+            dat.to_parquet(f'data/pbp/pbp_{szn}.parquet')
+        except Exception as e:
+            print(e)
+            try:
+                url = f"https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{szn}.parquet"
+                file_path = f"data/pbp/pbp_{szn}.parquet"
+                response = requests.get(url)
+                if response.status_code == 200:
+                    with open(file_path, 'wb') as file:
+                        file.write(response.content)
+                else:
+                    print(f"Failed to download file. Status code: {response.status_code}")
+            except Exception as e:
+                print(e)
+
     # df = pd.read_parquet(f'data/pbp/pbp_{szns.max()}.parquet')
     # print(f'Latest data from {szns.max()}: week {df[df.season==szns.max()].week.max()}\n'
     #       f'{df[(df.season==szns.max())&(df.week==df.week.max())].groupby(["away_team","home_team"]).agg("count").index.tolist()}')
