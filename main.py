@@ -111,10 +111,13 @@ def pull_bt(lookback):
             df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
 
         if not os.path.exists(f'data/bt/{lookback}'): os.makedirs(f'data/bt/{lookback}')
-        pred = model_shredski.modelo(df, season, week).round(1)
-        pred.columns = pred.columns.get_level_values(0)
-        pred.to_csv(f'data/bt/{lookback}/bt_{season}_{week}_{lookback}.csv')
-        print(tabulate(pred,headers='keys'))
+        try:
+            pred = model_shredski.modelo(df, season, week).round(1)
+            pred.columns = pred.columns.get_level_values(0)
+            pred.to_csv(f'data/bt/{lookback}/bt_{season}_{week}_{lookback}.csv')
+            print(tabulate(pred,headers='keys'))
+        except Exception as e:
+            print(e)
 
 def back_test(bt):
     lst = []
@@ -167,12 +170,12 @@ def back_test(bt):
     # print(len(big[big.dinner==1])/len(big))
 
 def run(season, week, lookback):
-    if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
-        df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
-    else:
-        df = data_crunchski_2.prep_test_train(season, week, lookback)
-        if not os.path.exists('data/stats'): os.makedirs('data/stats')
-        df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    # if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
+    #     df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    # else:
+    df = data_crunchski_2.prep_test_train(season, week, lookback)
+    if not os.path.exists('data/stats'): os.makedirs('data/stats')
+    df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
 
     pred = model_shredski.modelo(df, season, week)
     return pred
@@ -183,15 +186,15 @@ if __name__ == '__main__':
     data_pullson.pull_pbp([2024])
     data_pullson.pull_ngs(range(1999, 2025))
 
-    df = pd.read_parquet('data/ngs_passing.parquet')
-    print(tabulate(df.tail(15),headers='keys'))
+    # df = pd.read_parquet('data/ngs_passing.parquet')
+    # print(tabulate(df.tail(15),headers='keys'))
 
     season = 2024
-    week = 3
+    week = 8
     lookback = 20
 
-    # pull_bt(30)
-    # back_test(30)
+    # pull_bt(20)
+    # back_test(20)
 
     pred = run(season, week, lookback).round(1)
 
