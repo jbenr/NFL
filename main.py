@@ -190,8 +190,8 @@ if __name__ == '__main__':
     # print(tabulate(df.tail(15),headers='keys'))
 
     season = 2024
-    week = 9
-    lookback = 20
+    week = 11
+    lookback = 10
 
     # pull_bt(20)
     # back_test(20)
