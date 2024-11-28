@@ -90,7 +90,7 @@ def h_to_the_tml(pred, season, week, lookback):
         'var': lambda x: set_precision(x, precision=1)
     }).applymap(highlight_picks, subset=['away_team','home_team','pick'])
 
-    html.to_html(f'data/results/html_{season}_{week}_{lookback}.html')
+    html.to_html(f'data/results/html_{season}_{week}_{lookback}_weighted.html')
 
     print(tabulate(result,headers='keys'))
 
@@ -175,7 +175,7 @@ def run(season, week, lookback):
     # else:
     df = data_crunchski_2.prep_test_train(season, week, lookback)
     if not os.path.exists('data/stats'): os.makedirs('data/stats')
-    df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}_weighted.parquet')
 
     pred = model_shredski.modelo(df, season, week)
     return pred
@@ -190,7 +190,7 @@ if __name__ == '__main__':
     # print(tabulate(df.tail(15),headers='keys'))
 
     season = 2024
-    week = 11
+    week = 13
     lookback = 10
 
     # pull_bt(20)

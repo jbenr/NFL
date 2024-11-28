@@ -1,13 +1,15 @@
 import pandas as pd
+import numpy as np
 from tabulate import tabulate, tabulate_formats
 from scipy import stats
 from datetime import datetime
+
 from tqdm import tqdm
 import concurrent.futures
 import os
 
 
-def slicer(df, play_type, group, stat, agg):
+def slicer1(df, play_type, group, stat, agg):
     df1 = df.copy()
 
     if type(play_type)==type(['doo','doo']): df1 = df.loc[df['play_type'].isin(play_type)]
@@ -22,6 +24,109 @@ def slicer(df, play_type, group, stat, agg):
 
     df1.index.name = 'team'
     return df1[stat]
+
+
+def slicer2(df, play_type, group, stat, agg):
+    df1 = df.copy()
+
+    # Filter by play_type
+    if isinstance(play_type, list):
+        df1 = df1.loc[df1['play_type'].isin(play_type)]
+    elif isinstance(play_type, str):
+        df1 = df1.loc[df1['play_type'] == play_type]
+
+    # Calculate weights based on game_date
+    if 'game_date' in df1.columns:
+        max_date = pd.to_datetime(df1['game_date']).max()
+        df1['weight'] = df1['game_date'].apply(lambda x: (max_date - pd.to_datetime(x)).days)
+        df1['weight'] = df1['weight'].rank(ascending=False)  # Rank for higher weights to recent dates
+        df1['weight'] /= df1['weight'].sum()  # Normalize weights to sum to 1
+    else:
+        df1['weight'] = 1  # Default to equal weights if game_date is missing
+
+    # Grouping and aggregation
+    if isinstance(group, list):
+        if agg == 'count':
+            df1 = df1.groupby(group).size().rename(stat)
+        elif agg == 'mean':
+            df1 = df1.groupby(group).apply(
+                lambda x: (x[stat] * x['weight']).sum() / x['weight'].sum()
+            )
+        elif agg == 'sum':
+            df1 = df1.groupby(group).apply(lambda x: (x[stat] * x['weight']).sum())
+    else:
+        if agg == 'count':
+            df1 = df1.groupby([group]).size().rename(stat)
+        elif agg == 'mean':
+            df1 = df1.groupby([group]).apply(
+                lambda x: (x[stat] * x['weight']).sum() / x['weight'].sum()
+            )
+        elif agg == 'sum':
+            df1 = df1.groupby([group]).apply(lambda x: (x[stat] * x['weight']).sum())
+
+    df1.index.name = 'team'
+    return df1
+
+def gradual_acceleration_with_floor(days_from_max, total_season_days=130, steepness=5, floor_weight=0.05):
+    # Normalize days_from_max to a 0–1 scale relative to total_season_days
+    normalized_days = days_from_max / total_season_days
+
+    # Apply a polynomial decay with a floor for older games
+    weights = np.exp(-steepness * normalized_days**3)
+    weights = np.maximum(weights, floor_weight)  # Ensure weights don't drop below the floor
+
+    # Normalize weights to sum to 1
+    normalized_weights = weights / weights.sum()
+    return normalized_weights
+
+
+def slicer(df, play_type, group, stat, agg,
+           total_season_days=160, steepness=2, floor_weight=0.05):
+    df1 = df.copy()
+
+    # Filter by play_type
+    if isinstance(play_type, list):
+        df1 = df1.loc[df1['play_type'].isin(play_type)]
+    elif isinstance(play_type, str):
+        df1 = df1.loc[df1['play_type'] == play_type]
+
+    # Calculate days from max_date and apply weights
+    if 'game_date' in df1.columns:
+        max_date = pd.to_datetime(df1['game_date']).max()
+        df1['days_from_max'] = (max_date - pd.to_datetime(df1['game_date'])).dt.days
+
+        # Compute weights using gradual acceleration decay with a floor
+        df1['weight'] = gradual_acceleration_with_floor(
+            df1['days_from_max'].values,
+            total_season_days=total_season_days,
+            steepness=steepness,
+            floor_weight=floor_weight
+        )
+    else:
+        df1['weight'] = 1  # Default to equal weights if game_date is missing
+
+    # Grouping and weighted aggregation
+    if isinstance(group, list):
+        if agg == 'count':
+            df1 = df1.groupby(group).size().rename(stat)
+        elif agg == 'mean':
+            df1 = df1.groupby(group).apply(
+                lambda x: (x[stat] * x['weight']).sum() / x['weight'].sum()
+            )
+        elif agg == 'sum':
+            df1 = df1.groupby(group).apply(lambda x: (x[stat] * x['weight']).sum())
+    else:
+        if agg == 'count':
+            df1 = df1.groupby([group]).size().rename(stat)
+        elif agg == 'mean':
+            df1 = df1.groupby([group]).apply(
+                lambda x: (x[stat] * x['weight']).sum() / x['weight'].sum()
+            )
+        elif agg == 'sum':
+            df1 = df1.groupby([group]).apply(lambda x: (x[stat] * x['weight']).sum())
+
+    df1.index.name = 'team'
+    return df1
 
 
 def calc_stats(df):
@@ -46,10 +151,12 @@ def calc_stats(df):
                                    slicer(df,'pass', 'defteam', 'complete_pass', 'count')      # Def pass completion %
 
     temp = slicer(df,None, ['game_id','series','posteam'], 'series_success', 'mean').reset_index()
+    temp = temp.rename(columns={0: 'series_success'})
     guy['off_series_success_%'] = \
         slicer(temp,None, 'posteam', 'series_success', 'sum')/\
         slicer(temp,None, 'posteam', 'series_success', 'count')             # Off series sucess %
     temp = slicer(df,None, ['game_id','series','defteam'], 'series_success', 'mean').reset_index()
+    temp = temp.rename(columns={0: 'series_success'})
     guy['def_series_success_%'] = \
         slicer(temp,None, 'defteam', 'series_success', 'sum')/\
         slicer(temp,None, 'defteam', 'series_success', 'count')             # Def series sucess %
@@ -91,7 +198,9 @@ def calc_stats(df):
                 pd.to_datetime(df1['drive_time_of_possession'], format='%M:%S').dt.minute * 60)
 
     temp = slicer(df1, None, ['game_id', 'drive', 'posteam'], 'drive_sec_of_possession', 'mean').reset_index()
+    temp = temp.rename(columns={0: 'drive_sec_of_possession'})
     temp = slicer(temp, None, ['game_id', 'posteam'], 'drive_sec_of_possession', 'sum').reset_index()
+    temp = temp.rename(columns={0: 'drive_sec_of_possession'})
     temp['drive_sec_of_possession'] = temp['drive_sec_of_possession'] / 3600
     guy['off_possession_%'] = slicer(temp, None, 'posteam', 'drive_sec_of_possession', 'mean')  # Possession %
 
@@ -104,6 +213,7 @@ def calc_stats(df):
     # # PAT 1, FG Missed -1, 0-39 3, 40-49 4, 50-59 5, 60+ 6
     # fg = np.where(df[''])
     # guy['field_goals'] = df.loc[df['play_type']=='field_goal'].groupby(['posteam']).agg('mean',numeric_only=True)['']
+    print(tabulate(guy.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
 
     return guy
 
@@ -264,7 +374,8 @@ def prep_test_train(szn, week, lookback):
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
-    num_workers = max(1, num_cores // 2)
+    # num_workers = max(1, num_cores // 2)
+    num_workers = 1
     print(f'Num workers: {num_workers}')
     args_list = [(s, w, lookback, pbp, ngs, sched, df) for s, w in tings]
 
