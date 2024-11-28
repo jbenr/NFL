@@ -81,7 +81,7 @@ def gradual_acceleration_with_floor(days_from_max, total_season_days=130, steepn
 
 
 def slicer(df, play_type, group, stat, agg,
-           total_season_days=160, steepness=2, floor_weight=0.05):
+           total_season_days=160, steepness=3, floor_weight=0.05):
     df1 = df.copy()
 
     # Filter by play_type
@@ -374,8 +374,8 @@ def prep_test_train(szn, week, lookback):
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
-    # num_workers = max(1, num_cores // 2)
-    num_workers = 1
+    num_workers = max(1, num_cores // 2)
+    # num_workers = 1
     print(f'Num workers: {num_workers}')
     args_list = [(s, w, lookback, pbp, ngs, sched, df) for s, w in tings]
 
