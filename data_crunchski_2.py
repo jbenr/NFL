@@ -213,7 +213,7 @@ def calc_stats(df):
     # # PAT 1, FG Missed -1, 0-39 3, 40-49 4, 50-59 5, 60+ 6
     # fg = np.where(df[''])
     # guy['field_goals'] = df.loc[df['play_type']=='field_goal'].groupby(['posteam']).agg('mean',numeric_only=True)['']
-    print(tabulate(guy.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
+    # print(tabulate(guy.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
 
     return guy
 
