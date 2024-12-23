@@ -32,7 +32,7 @@ def modelo(data, season, week):
         "away_off_fourth_down_%","away_def_fourth_down_%",
         "away_off_turnovers_pp","away_def_turnovers_pp",
         "away_off_penalties_pp","away_def_penalties_pp",
-        "away_off_passer_rating","away_def_passer_rating"
+        "away_off_qb_elo","away_def_qb_elo"
     ]
 
     preds = dat[(dat.season==season)&(dat.week==week)]

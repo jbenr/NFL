@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from opt_einsum.blas import tensor_blas
 from tabulate import tabulate, tabulate_formats
 from scipy import stats
 from datetime import datetime
@@ -7,6 +8,7 @@ from datetime import datetime
 from tqdm import tqdm
 import concurrent.futures
 import os
+import re
 
 
 def slicer1(df, play_type, group, stat, agg):
@@ -244,6 +246,97 @@ def calc_ngs(qb, sched):
 
     return guy
 
+
+def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.05):
+    sched = sched_.merge(df_[['season', 'week']], on=['season', 'week']).drop_duplicates()
+    sched = pd.merge(sched, df_[['season', 'week', 'game_date', 'home_team']], on=['season', 'week', 'home_team'], how='left').drop_duplicates()
+    sched['away_qb_short'] = sched.away_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+    sched['home_qb_short'] = sched.home_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+
+    p = df_.groupby(['season', 'week', 'game_date', 'passer']).agg({
+        'qb_scramble': 'sum',
+        'rushing_yards': 'sum',
+        'incomplete_pass': 'sum',
+        'complete_pass': 'sum',
+        'passing_yards': 'sum',
+        'pass_touchdown': 'sum',
+        'interception': 'sum',
+        'sack': 'sum'
+    }).reset_index().rename(columns={'passer': 'name', 'rushing_yards': 'scramble_yards'})
+
+    r = df_.groupby(['season', 'week', 'game_date', 'rusher']).agg({
+        'rush_attempt': 'sum',
+        'rushing_yards': 'sum',
+        'rush_touchdown': 'sum'
+    }).reset_index().rename(columns={'rusher': 'name'})
+
+    guy = pd.merge(p, r, how='left', on=['season', 'week', 'game_date', 'name'])
+    guy['pass_attempt'] = guy.incomplete_pass + guy.complete_pass
+    guy['rush_attempt'] = guy.rush_attempt + guy.qb_scramble
+    guy['rushing_yards'] = guy.rushing_yards + guy.scramble_yards
+    guy.drop(columns=['qb_scramble', 'scramble_yards', 'incomplete_pass'], inplace=True)
+    guy.fillna(0, inplace=True)
+
+    # QB ELO formula
+    guy['qb_elo'] = (-2.2 * guy.pass_attempt + 3.7 * guy.complete_pass + guy.passing_yards / 5 +
+                     11.3 * guy.pass_touchdown - 14.1 * guy.interception - 8 * guy.sack -
+                     1.1 * guy.rush_attempt + 0.6 * guy.rushing_yards + 15.9 * guy.rush_touchdown)
+
+    sched = pd.merge(sched, guy[['season', 'week', 'name', 'qb_elo']], how='left',
+                     left_on=['season', 'week', 'away_qb_short'], right_on=['season', 'week', 'name']
+                     ).rename(columns={'qb_elo': 'away_qb_elo'}).drop(columns='name')
+    sched = pd.merge(sched, guy[['season', 'week', 'name', 'qb_elo']], how='left',
+                     left_on=['season', 'week', 'home_qb_short'], right_on=['season', 'week', 'name']
+                     ).rename(columns={'qb_elo': 'home_qb_elo'}).drop(columns='name')
+
+    away = sched[['season', 'week', 'away_team', 'home_qb_elo', 'game_date']].rename(
+        columns={'away_team': 'team', 'home_qb_elo': 'def_qb_elo'}
+    )
+    home = sched[['season', 'week', 'home_team', 'away_qb_elo', 'game_date']].rename(
+        columns={'home_team': 'team', 'away_qb_elo': 'def_qb_elo'}
+    )
+    defense = pd.concat([away, home]).sort_values(by=['season', 'week', 'team'])
+
+    max_date = pd.to_datetime(defense['game_date']).max()
+    defense['days_from_max'] = (max_date - pd.to_datetime(defense['game_date'])).dt.days
+    defense['weight'] = gradual_acceleration_with_floor(
+        defense['days_from_max'].values,
+        total_season_days=total_season_days,
+        steepness=steepness,
+        floor_weight=floor_weight
+    )
+    # print(tabulate(defense,headers='keys',tablefmt=tabulate_formats[4]))
+
+    def_mean = (defense['def_qb_elo'] * defense['weight']).sum() / defense['weight'].sum()
+    defense = defense.groupby('team').apply(
+        lambda x: (x['def_qb_elo'] * x['weight']).sum() / x['weight'].sum()
+    )
+    defense -= def_mean
+    defense = defense.reset_index(name='def_qb_elo')
+
+    max_date = pd.to_datetime(guy['game_date']).max()
+    guy['days_from_max'] = (max_date - pd.to_datetime(guy['game_date'])).dt.days
+    guy['weight'] = gradual_acceleration_with_floor(
+        guy['days_from_max'].values,
+        total_season_days=total_season_days,
+        steepness=4,
+        floor_weight=0.4
+    )
+    # print(tabulate(guy,headers='keys',tablefmt=tabulate_formats[4]))
+
+    guy_weighted = guy.groupby('name').apply(
+        lambda x: (x['qb_elo'] * x['weight']).sum() / x['weight'].sum()
+    ).reset_index(name='weighted_qb_elo')
+
+    # sched = sched.merge(sched,guy,left_on=['away_qb_short'])
+
+    # print(tabulate(guy_weighted, headers='keys', tablefmt=tabulate_formats[2]))
+    # print(tabulate(defense.reset_index(), headers='keys', tablefmt=tabulate_formats[2]))
+    # print(tabulate(sched.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
+
+    return guy_weighted, defense
+
+
 # helpers for comp_stats
 def rank_it(x):
     x = x.fillna(x.median())
@@ -270,7 +363,6 @@ def comp_stats(stats, sched):
 
     df_ = []
     for away, home in sched.groupby(['away_team','home_team']).agg('count').index:
-        # print(away,home)
         away = stats_[stats_.index==away]
         home = stats_[stats_.index==home]
         away.columns = [f'away_{col}' for col in away.columns]
@@ -300,8 +392,7 @@ def comp_stats(stats, sched):
         df_.append(df)
     df = pd.concat(df_)
     sched = pd.merge(sched, df, how='left', on=['away_team','home_team'])
-    # sched.to_excel('data/run.xlsx')
-    # breakpoint()
+
     return sched
 
 
@@ -336,24 +427,22 @@ def prep_test_train(szn, week, lookback):
     pbp = [pd.read_parquet(f'data/pbp/pbp_{szn}.parquet') for szn in df_.season.unique().tolist()]
     pbp = pd.concat(pbp)
 
-    ngs = pd.read_parquet(f'data/ngs_passing.parquet')
+    # ngs = pd.read_parquet(f'data/ngs_passing.parquet')
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     print(tings)
 
     def calculate_stats(args):
-        s, w, lookback, pbp, ngs, sched, df = args
+        s, w, lookback, pbp, sched, df = args
         # print(f'Calculating stats for szn:{s} week:{w}')
 
-        pbp_, ngs_ = [], []
+        pbp_, qbr_ = [], []
         s_, w_, lb_ = s, w - 1, lookback
 
         while lb_ > 0:
             temp = pbp.query(f'season=={s_} & week=={w_}')
             pbp_.append(temp)
-
-            temp = ngs.query(f'season=={s_} & week=={w_}')
-            ngs_.append(temp)
+            qbr_.append(temp)
 
             w_ -= 1
             if w_ <= 0: s_ -= 1; w_ = sched[sched.season == s_].week.max()
@@ -362,22 +451,34 @@ def prep_test_train(szn, week, lookback):
         pbp_ = pd.concat(pbp_)
         calc = calc_stats(pbp_)
 
-        ngs_ = pd.concat(ngs_)
-        ngs_ = calc_ngs(ngs_, sched)
-
-        calc2 = pd.merge(calc, ngs_, how='left', on='team')
+        qbr_ = pd.concat(qbr_)
+        qb, dee = calc_qb_elo(qbr_, sched)
 
         sched_ = df.query(f'season=={s} & week=={w}')
-        comp = comp_stats(calc2, sched_)
+        sched_['away_qb_short'] = sched_.away_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+        sched_['home_qb_short'] = sched_.home_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+        qb_team_map = pd.concat([
+            sched_[['away_qb_short', 'away_team']].rename(columns={'away_qb_short': 'qb', 'away_team': 'team'}),
+            sched_[['home_qb_short', 'home_team']].rename(columns={'home_qb_short': 'qb', 'home_team': 'team'})
+        ])
 
+        def strip_suffix(name): return re.sub(r'\s+(Jr\.|Sr\.|I{1,3})$', '', name)
+        qb['name'] = qb['name'].apply(strip_suffix)
+
+        qb = pd.merge(qb, qb_team_map, left_on='name', right_on='qb', how='left').drop(columns='qb').sort_values(by='team').reset_index(drop=True)
+
+        calc = pd.merge(calc, qb, on='team', how='left').rename(columns={'weighted_qb_elo':'off_qb_elo'}).drop(columns='name')
+        calc = pd.merge(calc, dee, on='team', how='left').set_index('team')
+
+        comp = comp_stats(calc, sched_)
         return comp
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
     num_workers = max(1, num_cores // 2)
     # num_workers = 1
-    print(f'Num workers: {num_workers}')
-    args_list = [(s, w, lookback, pbp, ngs, sched, df) for s, w in tings]
+    print(f'Num workers: {num_workers} from {num_cores} cores!')
+    args_list = [(s, w, lookback, pbp, sched, df) for s, w in tings]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         results = list(
@@ -385,3 +486,6 @@ def prep_test_train(szn, week, lookback):
 
     data = pd.concat(results).reset_index(drop=True)
     return data
+
+
+# print(tabulate(prep_test_train(2024, 14, 10).tail(5),headers='keys',tablefmt=tabulate_formats[1]))

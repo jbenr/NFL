@@ -1,6 +1,9 @@
 # Go Commies
 import numpy as np
 import pandas as pd
+from datetime import datetime
+
+from opt_einsum.blas import tensor_blas
 from tabulate import tabulate, tabulate_formats
 import os
 import glob
@@ -71,13 +74,25 @@ def h_to_the_tml(pred, season, week, lookback):
             return f'background-color: {mapper[3]}'
         else: return ''
 
-    picks = result[(result['var']<=0.4)&(result['diff']>4)]['pick'].tolist()
+    picks = result.copy()
+    picks['abs_pred'] = abs(picks.prediction)
+    # picks = picks[picks['diff']>picks['var']]
+    picks = picks[picks['abs_pred']>1]
+    picks = picks[picks['var']<=0.5]
+    picks = picks[picks['diff']>3]['pick'].to_list()
+
+    ud = result.copy()
+    ud['objection'] = ((ud.spread * ud.prediction) < 0).astype(int)
+    ud = ud[ud.objection==1]['pick'].to_list()
+
     def highlight_picks(x):
         return f'background-color: {mapper[2]}' if x in picks else ''
+    def highlight_ud(x):
+        return f'background-color: {mapper[1]}' if x in ud else ''
     # result = result.drop(columns=['pick'])
     result = result.reset_index(drop=True)
 
-    html = result.style \
+    html = (result.style \
         .background_gradient(subset=['diff'],cmap='Greens') \
         .background_gradient(subset=['var'],cmap='Reds') \
         .applymap(style_fonts_and_borders) \
@@ -87,8 +102,9 @@ def h_to_the_tml(pred, season, week, lookback):
         'spread': lambda x: style_spread(x, precision=1),
         'prediction': lambda x: style_spread(x, precision=1),
         'diff': lambda x: set_precision(x, precision=1),
-        'var': lambda x: set_precision(x, precision=1)
-    }).applymap(highlight_picks, subset=['away_team','home_team','pick'])
+        'var': lambda x: set_precision(x, precision=1)}) \
+        .applymap(highlight_picks, subset=['away_team','home_team','pick']))\
+        .applymap(highlight_ud, subset=['away_team','home_team','pick'])
 
     html.to_html(f'data/results/html_{season}_{week}_{lookback}_weighted.html')
 
@@ -96,39 +112,45 @@ def h_to_the_tml(pred, season, week, lookback):
 
 def pull_bt(lookback):
     sched = pd.read_parquet('data/sched.parquet')
+    sched.dropna(subset='result',inplace=True)
+    print(tabulate(sched.tail(5), headers='keys'))
     sched = sched[sched['game_type']=='REG'].groupby(['season','week']).agg('count').index.tolist()
-    for s, w in sched[-lookback:]:
+    sched.reverse()
+    for s, w in sched[:-lookback]:
         season = s
         week = w
         lookback = lookback
 
-        # print(tabulate(data_pullson.pull_odds(),headers='keys'))
-
-        if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
-            df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
-        else:
+        try:
+            # if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
+            #     df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+            # else:
             df = data_crunchski_2.prep_test_train(season, week, lookback)
             df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
 
-        if not os.path.exists(f'data/bt/{lookback}'): os.makedirs(f'data/bt/{lookback}')
-        try:
-            pred = model_shredski.modelo(df, season, week).round(1)
-            pred.columns = pred.columns.get_level_values(0)
-            pred.to_csv(f'data/bt/{lookback}/bt_{season}_{week}_{lookback}.csv')
-            print(tabulate(pred,headers='keys'))
+            if not os.path.exists(f'data/bt/{lookback}'): os.makedirs(f'data/bt/{lookback}')
+            try:
+                pred = model_shredski.modelo(df, season, week).round(1)
+                pred.columns = pred.columns.get_level_values(0)
+                pred.to_csv(f'data/bt/{lookback}/bt_{season}_{week}_{lookback}.csv')
+                print(tabulate(pred,headers='keys'))
+            except Exception as e:
+                print(e)
         except Exception as e:
-            print(e)
+            print(f'Error running season: {season}, week: {week}, lookback: {lookback} - {e}')
 
 def back_test(bt):
     lst = []
     for i in os.listdir(f'data/bt/{bt}'):
         name = i.split('_')
-        if name[3][:2] == str(bt):
-            temp = pd.read_csv(f'data/bt/{bt}/{i}')
-            temp['week'] = int(name[2])
-            temp['season'] = int(name[1])
-            lst.append(temp)
-        else: None
+        try:
+            if name[3][:2] == str(bt):
+                temp = pd.read_csv(f'data/bt/{bt}/{i}')
+                temp['week'] = int(name[2])
+                temp['season'] = int(name[1])
+                lst.append(temp)
+            else: None
+        except Exception as e: print(e)
     bt = pd.concat(lst)
     sched = pd.read_parquet('data/sched.parquet')
     bt = pd.merge(sched, bt, how='left', on=['week','season','away_team','home_team'])
@@ -136,6 +158,7 @@ def back_test(bt):
     bt = bt.dropna(subset=['result'])
     bt = bt[['season','week','away_team','away_score','home_team','home_score','result','spread_line','prediction','prediction.1']]
     bt['prediction'] = bt['prediction']*-1
+    bt['abs_pred'] = abs(bt['prediction'])
     bt['diff'] = bt.spread_line - bt.prediction
     bt['diff_abs'] = abs(bt['diff'])
 
@@ -152,28 +175,46 @@ def back_test(bt):
     bt['winner'] = bt.apply(winner_func, axis=1)
     bt['dinner'] = (bt['pick'] == bt['winner']).astype(int)
     bt['switcherooni'] = ((bt['prediction']==abs(bt['prediction'])) != (bt['spread_line']==abs(bt['spread_line']))).astype(int)
+    bt['abs_spread'] = abs(bt['spread_line'])
 
     bt = bt.dropna(subset=['winner'])
-    bt_s = bt[bt.switcherooni==1]
-    # print(tabulate(bt[bt.switcherooni==1],headers='keys'))
+    # bt_s = bt[bt.switcherooni==1]
+    # print(bt_s['dinner'].sum()/len(bt_s))
+    g = bt.groupby('pick').agg({'dinner':'sum','winner':'count'})
+    g['%'] = g['dinner']/g['winner']
+    # print(tabulate(g,headers='keys'))
 
-    bins = np.linspace(-20,20,21)
-    # big = bt[bt.diff_abs>4]
+    bins = np.linspace(0,10,101)
+    var_bins = np.linspace(0,5,51)
+
+    big = bt[bt.diff_abs<=100]
+    # big = big[big['diff_abs']>big['prediction.1']]
+    big = big[(big['abs_pred']>1)&(big['abs_pred']<=2)]
+    big = big[big['switcherooni']==1]
     # big = big[big['prediction.1']<=0.4]
-    # piv = bt[(bt['prediction.1']<0.6)&(bt['prediction.1']>0.2)].pivot_table(columns='dinner', index=pd.cut(bt['diff'], bins), aggfunc='size')
-    # piv = bt.pivot_table(columns='dinner', index=pd.cut(bt['prediction.1'], bins), aggfunc='size')
-    piv = bt.pivot_table(columns='dinner', index=pd.cut(bt['diff'], bins), aggfunc='size')
+    # big = big[big.diff_abs>2.5]
 
-    # piv = bt.pivot_table(columns='dinner', index='switcherooni', aggfunc='size')
-    print(piv)
+    # big = big[big.diff_abs>=2]
+    # big = big[big.season == 2024]
     # print(tabulate(big,headers='keys'))
-    # print(len(big[big.dinner==1])/len(big))
+    print(len(big))
+
+    piv = big.pivot_table(columns='dinner', index=pd.cut(bt['diff_abs'], bins), aggfunc='size')
+    print(tabulate(piv,headers='keys',tablefmt=tabulate_formats[4]))
+    piv = big.pivot_table(columns='dinner', index=pd.cut(bt['prediction.1'], var_bins), aggfunc='size')
+    print(tabulate(piv,headers='keys',tablefmt=tabulate_formats[4]))
+    piv = big.pivot_table(columns='dinner', index=pd.cut(bt['abs_pred'], bins), aggfunc='size')
+    print(tabulate(piv,headers='keys',tablefmt=tabulate_formats[4]))
+
+    # print(tabulate(big,headers='keys'))
+    print(len(big[big.dinner==1])/len(big))
 
 def run(season, week, lookback):
-    # if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
-    #     df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
-    # else:
-    df = data_crunchski_2.prep_test_train(season, week, lookback)
+    if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
+        df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    else:
+        df = data_crunchski_2.prep_test_train(season, week, lookback)
+
     if not os.path.exists('data/stats'): os.makedirs('data/stats')
     df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}_weighted.parquet')
 
@@ -184,14 +225,14 @@ def run(season, week, lookback):
 if __name__ == '__main__':
     data_pullson.pull_sched(range(1999, 2025))
     data_pullson.pull_pbp([2024])
-    data_pullson.pull_ngs(range(1999, 2025))
+    # data_pullson.pull_ngs(range(1999, 2025))
 
     # df = pd.read_parquet('data/ngs_passing.parquet')
     # print(tabulate(df.tail(15),headers='keys'))
 
     season = 2024
-    week = 13
-    lookback = 10
+    week = 16
+    lookback = 20
 
     # pull_bt(20)
     # back_test(20)
