@@ -17,6 +17,9 @@ pd.set_option('display.max_columns', None)
 
 
 def h_to_the_tml(pred, season, week, lookback):
+    stats = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    print(tabulate(stats.tail(3),headers='keys',tablefmt=tabulate_formats[4]))
+
     lines = data_pullson.pull_odds()
     sched = pd.read_parquet('data/sched.parquet')
     sched = sched[(sched.season==season)&(sched.week==week)][['away_team','home_team','gameday','gametime']]
@@ -106,7 +109,7 @@ def h_to_the_tml(pred, season, week, lookback):
         .applymap(highlight_picks, subset=['away_team','home_team','pick']))\
         .applymap(highlight_ud, subset=['away_team','home_team','pick'])
 
-    html.to_html(f'data/results/html_{season}_{week}_{lookback}_weighted.html')
+    html.to_html(f'data/results/html_{season}_{week}_{lookback}.html')
 
     print(tabulate(result,headers='keys'))
 
@@ -176,6 +179,7 @@ def back_test(bt):
     bt['dinner'] = (bt['pick'] == bt['winner']).astype(int)
     bt['switcherooni'] = ((bt['prediction']==abs(bt['prediction'])) != (bt['spread_line']==abs(bt['spread_line']))).astype(int)
     bt['abs_spread'] = abs(bt['spread_line'])
+    bt['prediction.1'] = bt['prediction.1']/bt['abs_spread']
 
     bt = bt.dropna(subset=['winner'])
     # bt_s = bt[bt.switcherooni==1]
@@ -189,14 +193,14 @@ def back_test(bt):
 
     big = bt[bt.diff_abs<=100]
     # big = big[big['diff_abs']>big['prediction.1']]
-    big = big[(big['abs_pred']>1)&(big['abs_pred']<=2)]
-    big = big[big['switcherooni']==1]
-    # big = big[big['prediction.1']<=0.4]
-    # big = big[big.diff_abs>2.5]
+    # big = big[(big['abs_pred']>1)&(big['abs_pred']<=2)]
+    # big = big[big['switcherooni']==1]
+    big = big[big['prediction.1']<=0.1]
+    big = big[big.diff_abs>6]
 
     # big = big[big.diff_abs>=2]
-    # big = big[big.season == 2024]
-    # print(tabulate(big,headers='keys'))
+    big = big[big.season == 2024]
+    print(tabulate(big,headers='keys'))
     print(len(big))
 
     piv = big.pivot_table(columns='dinner', index=pd.cut(bt['diff_abs'], bins), aggfunc='size')
@@ -209,35 +213,35 @@ def back_test(bt):
     # print(tabulate(big,headers='keys'))
     print(len(big[big.dinner==1])/len(big))
 
-def run(season, week, lookback):
-    if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
-        df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
-    else:
-        df = data_crunchski_2.prep_test_train(season, week, lookback)
+def run(season, week, lookback, bt=False):
+    if bt:
+        if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
+            df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+        else: df = data_crunchski_2.prep_test_train(season, week, lookback)
+    else: df = data_crunchski_2.prep_test_train(season, week, lookback)
 
     if not os.path.exists('data/stats'): os.makedirs('data/stats')
-    df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}_weighted.parquet')
+    df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+
+    print(tabulate(df.tail(3),headers='keys',tablefmt=tabulate_formats[4]))
 
     pred = model_shredski.modelo(df, season, week)
     return pred
 
 
 if __name__ == '__main__':
-    data_pullson.pull_sched(range(1999, 2025))
-    data_pullson.pull_pbp([2024])
+    # data_pullson.pull_sched(range(1999, 2025))
+    # data_pullson.pull_pbp([2024])
     # data_pullson.pull_ngs(range(1999, 2025))
 
-    # df = pd.read_parquet('data/ngs_passing.parquet')
-    # print(tabulate(df.tail(15),headers='keys'))
-
     season = 2024
-    week = 16
+    week = 17
     lookback = 20
 
     # pull_bt(20)
     # back_test(20)
 
-    pred = run(season, week, lookback).round(1)
+    pred = run(season, week, lookback, bt=False).round(1)
 
     h_to_the_tml(pred, season, week, lookback)
 

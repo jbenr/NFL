@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import utils
 from opt_einsum.blas import tensor_blas
 from tabulate import tabulate, tabulate_formats
 from scipy import stats
@@ -455,8 +456,9 @@ def prep_test_train(szn, week, lookback):
         qb, dee = calc_qb_elo(qbr_, sched)
 
         sched_ = df.query(f'season=={s} & week=={w}')
-        sched_['away_qb_short'] = sched_.away_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
-        sched_['home_qb_short'] = sched_.home_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+        sched_.loc[:, 'away_qb_short'] = sched_['away_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+        sched_.loc[:, 'home_qb_short'] = sched_['home_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+
         qb_team_map = pd.concat([
             sched_[['away_qb_short', 'away_team']].rename(columns={'away_qb_short': 'qb', 'away_team': 'team'}),
             sched_[['home_qb_short', 'home_team']].rename(columns={'home_qb_short': 'qb', 'home_team': 'team'})
@@ -466,6 +468,8 @@ def prep_test_train(szn, week, lookback):
         qb['name'] = qb['name'].apply(strip_suffix)
 
         qb = pd.merge(qb, qb_team_map, left_on='name', right_on='qb', how='left').drop(columns='qb').sort_values(by='team').reset_index(drop=True)
+        utils.make_dir('data/qb')
+        qb.to_parquet(f'data/qb/qb_{s}_{w}_{lookback}.parquet')
 
         calc = pd.merge(calc, qb, on='team', how='left').rename(columns={'weighted_qb_elo':'off_qb_elo'}).drop(columns='name')
         calc = pd.merge(calc, dee, on='team', how='left').set_index('team')
@@ -475,8 +479,8 @@ def prep_test_train(szn, week, lookback):
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
-    num_workers = max(1, num_cores // 2)
-    # num_workers = 1
+    # num_workers = max(1, num_cores // 2)
+    num_workers = 1
     print(f'Num workers: {num_workers} from {num_cores} cores!')
     args_list = [(s, w, lookback, pbp, sched, df) for s, w in tings]
 
@@ -485,6 +489,7 @@ def prep_test_train(szn, week, lookback):
             tqdm(executor.map(calculate_stats, args_list), total=len(args_list), desc="Crunching the numbers"))
 
     data = pd.concat(results).reset_index(drop=True)
+    print(tabulate(data.tail(3),headers='keys',tablefmt=tabulate_formats[4]))
     return data
 
 
