@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 
+import utils
 from opt_einsum.blas import tensor_blas
 from tabulate import tabulate, tabulate_formats
 import os
@@ -17,12 +18,27 @@ pd.set_option('display.max_columns', None)
 
 
 def h_to_the_tml(pred, season, week, lookback):
-    stats = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
-    print(tabulate(stats.tail(3),headers='keys',tablefmt=tabulate_formats[4]))
+    qb = pd.read_parquet(f'data/qb/qb_{season}_{week}_{lookback}.parquet')
 
     lines = data_pullson.pull_odds()
     sched = pd.read_parquet('data/sched.parquet')
-    sched = sched[(sched.season==season)&(sched.week==week)][['away_team','home_team','gameday','gametime']]
+    sched = sched[(sched.season==season)&(sched.week==week)]
+
+    sched.loc[:, 'away_qb'] = sched['away_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+    sched.loc[:, 'home_qb'] = sched['home_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+    sched['away_qb'] = sched['away_qb'].apply(utils.strip_suffix)
+    sched['home_qb'] = sched['home_qb'].apply(utils.strip_suffix)
+
+    sched = pd.merge(sched, qb[['name','weighted_qb_elo']], left_on='away_qb', right_on='name', how='left').rename(
+        columns={'weighted_qb_elo':'away_qb_elo'}
+    ).drop(columns='name')
+    sched = pd.merge(sched, qb[['name','weighted_qb_elo']], left_on='home_qb', right_on='name', how='left').rename(
+        columns={'weighted_qb_elo':'home_qb_elo'}
+    ).drop(columns='name')
+
+    sched = sched[[
+        'away_team','home_team','gameday','gametime','away_qb_elo','home_qb_elo','away_qb','home_qb'
+    ]]
     pred.columns = pred.columns.get_level_values(0)
 
     result = pd.merge(lines, pred, on=['away_team','home_team'], how='left')
@@ -44,7 +60,11 @@ def h_to_the_tml(pred, season, week, lookback):
         else: return None
     result['pick'] = result.apply(pick_func, axis=1)
 
-    result = result[['gameday','gametime','away_team','spread','prediction','home_team','diff_abs','var','pick']]
+    result = result[['gameday','gametime',
+                     'away_qb','away_qb_elo','away_team',
+                     'spread','prediction',
+                     'home_team','home_qb','home_qb_elo',
+                     'diff_abs','var','pick']]
     result['gameday'] = pd.to_datetime(result['gameday'])
     result['gametime'] = pd.to_datetime(result['gametime']).dt.time
 
@@ -100,6 +120,8 @@ def h_to_the_tml(pred, season, week, lookback):
         .background_gradient(subset=['var'],cmap='Reds') \
         .applymap(style_fonts_and_borders) \
         .format({
+        'away_qb_elo': lambda x: set_precision(x, precision=1),
+        'home_qb_elo': lambda x: set_precision(x, precision=1),
         'gameday': lambda x: x.strftime(f'%a %m/%d'),
         'gametime': lambda x: x.strftime("%I:%M %p").lstrip('0'),
         'spread': lambda x: style_spread(x, precision=1),
@@ -223,8 +245,6 @@ def run(season, week, lookback, bt=False):
     if not os.path.exists('data/stats'): os.makedirs('data/stats')
     df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
 
-    print(tabulate(df.tail(3),headers='keys',tablefmt=tabulate_formats[4]))
-
     pred = model_shredski.modelo(df, season, week)
     return pred
 
@@ -241,7 +261,7 @@ if __name__ == '__main__':
     # pull_bt(20)
     # back_test(20)
 
-    pred = run(season, week, lookback, bt=False).round(1)
+    pred = run(season, week, lookback, bt=True).round(1)
 
     h_to_the_tml(pred, season, week, lookback)
 

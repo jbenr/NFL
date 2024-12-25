@@ -464,8 +464,7 @@ def prep_test_train(szn, week, lookback):
             sched_[['home_qb_short', 'home_team']].rename(columns={'home_qb_short': 'qb', 'home_team': 'team'})
         ])
 
-        def strip_suffix(name): return re.sub(r'\s+(Jr\.|Sr\.|I{1,3})$', '', name)
-        qb['name'] = qb['name'].apply(strip_suffix)
+        qb['name'] = qb['name'].apply(utils.strip_suffix)
 
         qb = pd.merge(qb, qb_team_map, left_on='name', right_on='qb', how='left').drop(columns='qb').sort_values(by='team').reset_index(drop=True)
         utils.make_dir('data/qb')
