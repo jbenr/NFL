@@ -478,8 +478,8 @@ def prep_test_train(szn, week, lookback):
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
-    # num_workers = max(1, num_cores // 2)
-    num_workers = 1
+    num_workers = max(1, num_cores // 2)
+    # num_workers = 1
     print(f'Num workers: {num_workers} from {num_cores} cores!')
     args_list = [(s, w, lookback, pbp, sched, df) for s, w in tings]
 

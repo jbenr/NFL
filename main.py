@@ -14,7 +14,30 @@ import data_crunchski_2
 import data_pullson
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import requests
 pd.set_option('display.max_columns', None)
+
+
+def download_team_logos(teams, logo_dir='data/logos'):
+    """
+    Given a list/array of team abbreviations, download the NFL team logos
+    from ESPN if they are not already present in logo_dir.
+    """
+    if not os.path.exists(logo_dir):
+        os.makedirs(logo_dir)
+    for team in teams:
+        # Construct the local file path.
+        logo_path = os.path.join(logo_dir, f'{team}.png')
+        if not os.path.exists(logo_path):
+            # Construct the ESPN URL for the team logo.
+            url = f'https://a.espncdn.com/i/teamlogos/nfl/500/{team}.png'
+            response = requests.get(url)
+            if response.status_code == 200:
+                with open(logo_path, 'wb') as f:
+                    f.write(response.content)
+                print(f"Downloaded logo for {team}")
+            else:
+                print(f"Failed to download logo for {team} from {url}")
 
 
 def h_to_the_tml(pred, season, week, lookback):
@@ -22,72 +45,92 @@ def h_to_the_tml(pred, season, week, lookback):
 
     lines = data_pullson.pull_odds()
     sched = pd.read_parquet('data/sched.parquet')
-    sched = sched[(sched.season==season)&(sched.week==week)]
+    sched = sched[(sched.season == season) & (sched.week == week)]
 
     sched.loc[:, 'away_qb'] = sched['away_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
     sched.loc[:, 'home_qb'] = sched['home_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
     sched['away_qb'] = sched['away_qb'].apply(utils.strip_suffix)
     sched['home_qb'] = sched['home_qb'].apply(utils.strip_suffix)
 
-    sched = pd.merge(sched, qb[['name','weighted_qb_elo']], left_on='away_qb', right_on='name', how='left').rename(
-        columns={'weighted_qb_elo':'away_qb_elo'}
+    sched = pd.merge(sched, qb[['name', 'weighted_qb_elo']], left_on='away_qb', right_on='name', how='left').rename(
+        columns={'weighted_qb_elo': 'away_qb_elo'}
     ).drop(columns='name')
-    sched = pd.merge(sched, qb[['name','weighted_qb_elo']], left_on='home_qb', right_on='name', how='left').rename(
-        columns={'weighted_qb_elo':'home_qb_elo'}
+    sched = pd.merge(sched, qb[['name', 'weighted_qb_elo']], left_on='home_qb', right_on='name', how='left').rename(
+        columns={'weighted_qb_elo': 'home_qb_elo'}
     ).drop(columns='name')
 
     sched = sched[[
-        'away_team','home_team','gameday','gametime','away_qb_elo','home_qb_elo','away_qb','home_qb'
+        'away_team', 'home_team', 'gameday', 'gametime', 'away_qb_elo', 'home_qb_elo', 'away_qb', 'home_qb'
     ]]
     pred.columns = pred.columns.get_level_values(0)
 
-    result = pd.merge(lines, pred, on=['away_team','home_team'], how='left')
-    result = pd.merge(result, sched, on=['away_team','home_team'], how='left')
+    result = pd.merge(lines, pred, on=['away_team', 'home_team'], how='left')
+    result = pd.merge(result, sched, on=['away_team', 'home_team'], how='left')
 
     def rename_col_by_index(dataframe, index_mapping):
         dataframe.columns = [index_mapping.get(i, col) for i, col in enumerate(dataframe.columns)]
         return dataframe
 
-    # Renaming columns using the function
+    # Renaming columns using the function.
     new_column_mapping = {6: 'var'}
     result = rename_col_by_index(result, new_column_mapping)
 
-    result['diff'] = result['prediction']+result['spread']
-    result['diff_abs'] = abs(result['prediction']+result['spread'])
+    result['diff'] = result['prediction'] + result['spread']
+    result['diff_abs'] = abs(result['prediction'] + result['spread'])
+
     def pick_func(x):
-        if x['diff'] < 0: return x['home_team']
-        elif x['diff'] > 0: return x['away_team']
-        else: return None
+        if x['diff'] < 0:
+            return x['home_team']
+        elif x['diff'] > 0:
+            return x['away_team']
+        else:
+            return None
+
     result['pick'] = result.apply(pick_func, axis=1)
 
-    result = result[['gameday','gametime',
-                     'away_qb','away_qb_elo','away_team',
-                     'spread','prediction',
-                     'home_team','home_qb','home_qb_elo',
-                     'diff_abs','var','pick']]
+    # Adding logos
+    all_teams = pd.concat([result['away_team'], result['home_team']]).unique()
+    download_team_logos(all_teams, logo_dir='data/logos')
+
+    result['away_logo'] = result['away_team'].apply(lambda team: f'../logos/{team}.png')
+    result['home_logo'] = result['home_team'].apply(lambda team: f'../logos/{team}.png')
+
+    result = result[['gameday', 'gametime',
+                     'away_qb', 'away_qb_elo', 'away_logo', 'away_team',
+                     'spread', 'prediction',
+                     'home_team', 'home_logo', 'home_qb', 'home_qb_elo',
+                     'diff_abs', 'var', 'pick']]
+
     result['gameday'] = pd.to_datetime(result['gameday'])
     result['gametime'] = pd.to_datetime(result['gametime']).dt.time
 
-    result = result.sort_values(by=['gameday','gametime','away_team'])
+    result = result.sort_values(by=['gameday', 'gametime', 'away_team'])
     result = result.dropna(subset=['prediction'])
-    result['prediction'] = result['prediction']*-1
-    result = result.round(1).rename(columns={'diff_abs':'diff'})
+    result['prediction'] = result['prediction'] * -1
+    result = result.round(1).rename(columns={'diff_abs': 'diff'})
 
-    if not os.path.exists('data/results'): os.makedirs('data/results')
+    if not os.path.exists('data/results'):
+        os.makedirs('data/results')
     result.to_csv(f'data/results/results_{season}_{week}_{lookback}.csv')
 
     def style_fonts_and_borders(val):
         return 'font-size: 16px; font-family: Arial; border: 2px solid gray'
+
     def format_bold(x):
-        return f'font-weight: bold'
+        return 'font-weight: bold'
+
     def set_precision(val, precision):
         return f'{val:.{precision}f}'
+
     def style_spread(val, precision):
-        if val > 0: return f'+{val:.{precision}f}'
-        else: return f'{val:.{precision}f}'
+        if val > 0:
+            return f'+{val:.{precision}f}'
+        else:
+            return f'{val:.{precision}f}'
 
     mapper = {1: '#ffca1e', 2: '#ffe590', 3: '#fef2c9'}
     top_indexes = result.nlargest(3, 'diff').index
+
     def highlight_cells(x):
         if x == result.at[top_indexes[0], 'pick']:
             return f'background-color: {mapper[1]}'
@@ -95,45 +138,55 @@ def h_to_the_tml(pred, season, week, lookback):
             return f'background-color: {mapper[2]}'
         elif x == result.at[top_indexes[2], 'pick']:
             return f'background-color: {mapper[3]}'
-        else: return ''
+        else:
+            return ''
 
     picks = result.copy()
     picks['abs_pred'] = abs(picks.prediction)
     # picks = picks[picks['diff']>picks['var']]
-    picks = picks[picks['abs_pred']>1]
-    picks = picks[picks['var']<=0.5]
-    picks = picks[picks['diff']>3]['pick'].to_list()
+    picks = picks[picks['abs_pred'] > 1]
+    picks = picks[picks['var'] <= 0.5]
+    picks = picks[picks['diff'] > 3]['pick'].to_list()
 
     ud = result.copy()
     ud['objection'] = ((ud.spread * ud.prediction) < 0).astype(int)
-    ud = ud[ud.objection==1]['pick'].to_list()
+    ud = ud[ud.objection == 1]['pick'].to_list()
 
     def highlight_picks(x):
         return f'background-color: {mapper[2]}' if x in picks else ''
+
     def highlight_ud(x):
         return f'background-color: {mapper[1]}' if x in ud else ''
-    # result = result.drop(columns=['pick'])
+
     result = result.reset_index(drop=True)
 
-    html = (result.style \
-        .background_gradient(subset=['diff'],cmap='Greens') \
-        .background_gradient(subset=['var'],cmap='Reds') \
-        .applymap(style_fonts_and_borders) \
-        .format({
+    # Create the HTML representation with styling.
+    # Note the format functions for the logo columns:
+    # we wrap the local file path in an <img> tag.
+    html = (result.style
+            .background_gradient(subset=['diff'], cmap='Greens')
+            .background_gradient(subset=['var'], cmap='Reds')
+            .applymap(style_fonts_and_borders)
+            .format({
         'away_qb_elo': lambda x: set_precision(x, precision=1),
         'home_qb_elo': lambda x: set_precision(x, precision=1),
-        'gameday': lambda x: x.strftime(f'%a %m/%d'),
+        'gameday': lambda x: x.strftime('%a %m/%d'),
         'gametime': lambda x: x.strftime("%I:%M %p").lstrip('0'),
         'spread': lambda x: style_spread(x, precision=1),
         'prediction': lambda x: style_spread(x, precision=1),
         'diff': lambda x: set_precision(x, precision=1),
-        'var': lambda x: set_precision(x, precision=1)}) \
-        .applymap(highlight_picks, subset=['away_team','home_team','pick']))\
-        .applymap(highlight_ud, subset=['away_team','home_team','pick'])
+        'var': lambda x: set_precision(x, precision=1),
+        # Wrap the logo file path in an <img> tag.
+        'away_logo': lambda x: f'<img src="{x}" alt="Away Logo" height="50">' if pd.notnull(x) else '',
+        'home_logo': lambda x: f'<img src="{x}" alt="Home Logo" height="50">' if pd.notnull(x) else ''
+    })
+            .applymap(highlight_picks, subset=['away_team', 'home_team', 'pick'])
+            .applymap(highlight_ud, subset=['away_team', 'home_team', 'pick'])
+            )
+    # IMPORTANT: disable escaping so that the <img> tags render as images.
+    html.to_html(f'data/results/html_{season}_{week}_{lookback}.html', escape=False)
 
-    html.to_html(f'data/results/html_{season}_{week}_{lookback}.html')
-
-    print(tabulate(result,headers='keys'))
+    print(tabulate(result, headers='keys'))
 
 def pull_bt(lookback):
     sched = pd.read_parquet('data/sched.parquet')
@@ -211,17 +264,18 @@ def back_test(bt):
     # print(tabulate(g,headers='keys'))
 
     bins = np.linspace(0,10,101)
-    var_bins = np.linspace(0,5,51)
+    var_bins = np.linspace(0,1,51)
 
     big = bt[bt.diff_abs<=100]
+    # big = big[big.abs_pred < big.abs_spread]
     # big = big[big['diff_abs']>big['prediction.1']]
     # big = big[(big['abs_pred']>1)&(big['abs_pred']<=2)]
     # big = big[big['switcherooni']==1]
     big = big[big['prediction.1']<=0.1]
-    big = big[big.diff_abs>6]
+    # big = big[big.diff_abs>6]
 
     # big = big[big.diff_abs>=2]
-    big = big[big.season == 2024]
+    # big = big[big.season == 2024]
     print(tabulate(big,headers='keys'))
     print(len(big))
 
@@ -250,18 +304,18 @@ def run(season, week, lookback, bt=False):
 
 
 if __name__ == '__main__':
-    # data_pullson.pull_sched(range(1999, 2025))
-    # data_pullson.pull_pbp([2024])
+    data_pullson.pull_sched(range(1999, 2025))
+    data_pullson.pull_pbp([2024])
     # data_pullson.pull_ngs(range(1999, 2025))
 
     season = 2024
-    week = 17
+    week = 22
     lookback = 20
 
     # pull_bt(20)
     # back_test(20)
 
-    pred = run(season, week, lookback, bt=True).round(1)
+    pred = run(season, week, lookback, bt=False).round(1)
 
     h_to_the_tml(pred, season, week, lookback)
 
