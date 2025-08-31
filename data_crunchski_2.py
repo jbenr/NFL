@@ -425,7 +425,14 @@ def prep_test_train(szn, week, lookback):
 
     df_ = pd.concat([df]+df_)
 
-    pbp = [pd.read_parquet(f'data/pbp/pbp_{szn}.parquet') for szn in df_.season.unique().tolist()]
+    pbp = []
+    for szn in df_.season.unique().tolist():
+        try:
+            df_pbp = pd.read_parquet(f'data/pbp/pbp_{szn}.parquet')
+            pbp.append(df_pbp)
+        except FileNotFoundError:
+            print(f"⚠️ File not found for season {szn}. Skipping.")
+            continue
     pbp = pd.concat(pbp)
 
     # ngs = pd.read_parquet(f'data/ngs_passing.parquet')

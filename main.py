@@ -304,12 +304,12 @@ def run(season, week, lookback, bt=False):
 
 
 if __name__ == '__main__':
-    data_pullson.pull_sched(range(1999, 2025))
-    data_pullson.pull_pbp([2024])
+    data_pullson.pull_sched(range(1999, 2026))
+    data_pullson.pull_pbp([2025])
     # data_pullson.pull_ngs(range(1999, 2025))
 
-    season = 2024
-    week = 22
+    season = 2025
+    week = 1
     lookback = 20
 
     # pull_bt(20)
