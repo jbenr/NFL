@@ -290,14 +290,14 @@ def back_test(bt):
     print(len(big[big.dinner==1])/len(big))
 
 def run(season, week, lookback, bt=False):
-    if bt:
-        if os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
+    if bt and os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
             df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
-        else: df = data_crunchski_2.prep_test_train(season, week, lookback)
     else: df = data_crunchski_2.prep_test_train(season, week, lookback)
 
     if not os.path.exists('data/stats'): os.makedirs('data/stats')
     df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+
+    utils.pdf(df.tail(40))
 
     pred = model_shredski.modelo(df, season, week)
     return pred
@@ -312,10 +312,13 @@ if __name__ == '__main__':
     week = 1
     lookback = 20
 
+    sched = pd.read_parquet('data/sched.parquet')
+    utils.pdf(sched[(sched['season']==season) & (sched['week']==week)])
+
     # pull_bt(20)
     # back_test(20)
 
-    pred = run(season, week, lookback, bt=False).round(1)
+    pred = run(season, week, lookback, bt=True).round(1)
 
     h_to_the_tml(pred, season, week, lookback)
 

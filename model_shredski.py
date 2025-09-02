@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from tabulate import tabulate
+import utils
 from tensorflow import keras
 from keras.models import Sequential
 from keras.layers import Dense,Dropout
@@ -37,6 +38,8 @@ def modelo(data, season, week):
 
     preds = dat[(dat.season==season)&(dat.week==week)]
     train = dat[~((dat.season==season)&(dat.week==week))]
+
+    utils.pdf(preds)
 
     X,Y = train[features], train[target]
 
