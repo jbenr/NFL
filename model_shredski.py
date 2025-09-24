@@ -39,8 +39,6 @@ def modelo(data, season, week):
     preds = dat[(dat.season==season)&(dat.week==week)]
     train = dat[~((dat.season==season)&(dat.week==week))]
 
-    utils.pdf(preds)
-
     X,Y = train[features], train[target]
 
     # Create loss function that penalizes wrong winner

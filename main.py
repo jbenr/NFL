@@ -30,12 +30,14 @@ def download_team_logos(teams, logo_dir='data/logos'):
         logo_path = os.path.join(logo_dir, f'{team}.png')
         if not os.path.exists(logo_path):
             # Construct the ESPN URL for the team logo.
-            url = f'https://a.espncdn.com/i/teamlogos/nfl/500/{team}.png'
+            if team == "WAS":
+                url = "https://cdn.freebiesupply.com/images/thumbs/2x/washington-redskins-logo.png"
+            else:
+                url = f'https://a.espncdn.com/i/teamlogos/nfl/500/{team}.png'
             response = requests.get(url)
             if response.status_code == 200:
                 with open(logo_path, 'wb') as f:
                     f.write(response.content)
-                print(f"Downloaded logo for {team}")
             else:
                 print(f"Failed to download logo for {team} from {url}")
 
@@ -177,8 +179,8 @@ def h_to_the_tml(pred, season, week, lookback):
         'diff': lambda x: set_precision(x, precision=1),
         'var': lambda x: set_precision(x, precision=1),
         # Wrap the logo file path in an <img> tag.
-        'away_logo': lambda x: f'<img src="{x}" alt="Away Logo" height="50">' if pd.notnull(x) else '',
-        'home_logo': lambda x: f'<img src="{x}" alt="Home Logo" height="50">' if pd.notnull(x) else ''
+        'away_logo': lambda x: f'<img src="{x}" alt="Away Logo" height="25">' if pd.notnull(x) else '',
+        'home_logo': lambda x: f'<img src="{x}" alt="Home Logo" height="25">' if pd.notnull(x) else ''
     })
             .applymap(highlight_picks, subset=['away_team', 'home_team', 'pick'])
             .applymap(highlight_ud, subset=['away_team', 'home_team', 'pick'])
@@ -297,8 +299,6 @@ def run(season, week, lookback, bt=False):
     if not os.path.exists('data/stats'): os.makedirs('data/stats')
     df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
 
-    utils.pdf(df.tail(40))
-
     pred = model_shredski.modelo(df, season, week)
     return pred
 
@@ -309,7 +309,7 @@ if __name__ == '__main__':
     # data_pullson.pull_ngs(range(1999, 2025))
 
     season = 2025
-    week = 1
+    week = 3
     lookback = 20
 
     sched = pd.read_parquet('data/sched.parquet')
@@ -318,7 +318,7 @@ if __name__ == '__main__':
     # pull_bt(20)
     # back_test(20)
 
-    pred = run(season, week, lookback, bt=True).round(1)
-
+    pred = run(season, week, lookback, bt=False).round(1)
+    utils.pdf(pred)
     h_to_the_tml(pred, season, week, lookback)
 

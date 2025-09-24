@@ -402,7 +402,10 @@ def prep_test_train(szn, week, lookback):
     sched = sched[['season','week','game_type','away_team','away_score','home_team','home_score','away_rest','home_rest',
                    'roof','surface','temp','wind','away_qb_name','home_qb_name','away_coach','home_coach',
                    'referee']]
-    sched[~((sched.season==szn) & (sched.week>week))]
+    sched = sched.loc[~((sched['season'] == szn) & (sched['week'] > week))].copy()
+
+    bad = sched[(sched['season'] == szn) & (sched['week'] > week)]
+    print(f"Rows with season={szn} and week>{week}: {len(bad)}")  # should print 0
 
     df = []
     szn_, week_, lookback_ = szn, week, lookback

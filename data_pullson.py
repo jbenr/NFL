@@ -45,9 +45,14 @@ def pull_ngs(szns):
 
 def get_abbr():
     # get the response in the form of html
-    wikiurl = "https://en.wikipedia.org/wiki/Wikipedia:WikiProject_National_Football_League/National_Football_League_team_abbreviations"
+    wikiurl = "https://en.wikipedia.org/w/index.php?title=Wikipedia:WikiProject_National_Football_League/National_Football_League_team_abbreviations&oldid=1200558873"
     table_class = "wikitable sortable jquery-tablesorter"
-    response = requests.get(wikiurl)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36"
+    }
+    response = requests.get(wikiurl, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
     indiatable = soup.find('table',{'class':"wikitable"})
     df = pd.read_html(str(indiatable))
