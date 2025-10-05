@@ -309,8 +309,8 @@ if __name__ == '__main__':
     # data_pullson.pull_ngs(range(1999, 2025))
 
     season = 2025
-    week = 3
-    lookback = 20
+    week = 5
+    lookback = 40
 
     sched = pd.read_parquet('data/sched.parquet')
     utils.pdf(sched[(sched['season']==season) & (sched['week']==week)])
@@ -318,7 +318,7 @@ if __name__ == '__main__':
     # pull_bt(20)
     # back_test(20)
 
-    pred = run(season, week, lookback, bt=False).round(1)
+    pred = run(season, week, lookback, bt=True).round(1)
     utils.pdf(pred)
     h_to_the_tml(pred, season, week, lookback)
 
