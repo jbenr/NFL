@@ -109,24 +109,21 @@ def slicer(df, play_type, group, stat, agg,
         df1['weight'] = 1  # Default to equal weights if game_date is missing
 
     # Grouping and weighted aggregation
-    if isinstance(group, list):
-        if agg == 'count':
-            df1 = df1.groupby(group).size().rename(stat)
-        elif agg == 'mean':
-            df1 = df1.groupby(group).apply(
-                lambda x: (x[stat] * x['weight']).sum() / x['weight'].sum()
-            )
-        elif agg == 'sum':
-            df1 = df1.groupby(group).apply(lambda x: (x[stat] * x['weight']).sum())
-    else:
-        if agg == 'count':
-            df1 = df1.groupby([group]).size().rename(stat)
-        elif agg == 'mean':
-            df1 = df1.groupby([group]).apply(
-                lambda x: (x[stat] * x['weight']).sum() / x['weight'].sum()
-            )
-        elif agg == 'sum':
-            df1 = df1.groupby([group]).apply(lambda x: (x[stat] * x['weight']).sum())
+    group_cols = group if isinstance(group, list) else [group]
+    keys = [df1[c] for c in group_cols]  # array-like keys to group the Series
+
+    if agg == 'count':
+        df1 = df1.groupby(group_cols).size().rename(stat)
+
+    elif agg == 'sum':
+        wx = df1[stat] * df1['weight']  # Σ(x * w)
+        df1 = wx.groupby(keys).sum()
+
+    elif agg == 'mean':
+        wx = (df1[stat] * df1['weight'])  # Σ(x * w) / Σ(w)
+        num = wx.groupby(keys).sum()
+        den = df1['weight'].groupby(keys).sum()
+        df1 = num / den
 
     df1.index.name = 'team'
     return df1
@@ -217,6 +214,38 @@ def calc_stats(df):
     # fg = np.where(df[''])
     # guy['field_goals'] = df.loc[df['play_type']=='field_goal'].groupby(['posteam']).agg('mean',numeric_only=True)['']
     # print(tabulate(guy.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
+
+    # New features (same math)
+    guy['off_explosive_run_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] >= 10)],
+                                        'run', 'posteam', 'yards_gained', 'count') / \
+                                 slicer(df, 'run', 'posteam', 'yards_gained', 'count')
+    guy['def_explosive_run_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] >= 10)],
+                                        'run', 'defteam', 'yards_gained', 'count') / \
+                                 slicer(df, 'run', 'defteam', 'yards_gained', 'count')
+
+    guy['off_explosive_pass_%'] = slicer(df[(df['play_type'] == 'pass') & (df['yards_gained'] >= 20)],
+                                         'pass', 'posteam', 'yards_gained', 'count') / \
+                                  slicer(df, 'pass', 'posteam', 'yards_gained', 'count')
+    guy['def_explosive_pass_%'] = slicer(df[(df['play_type'] == 'pass') & (df['yards_gained'] >= 20)],
+                                         'pass', 'defteam', 'yards_gained', 'count') / \
+                                  slicer(df, 'pass', 'defteam', 'yards_gained', 'count')
+
+    guy['off_stuff_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] <= 0)],
+                                'run', 'posteam', 'yards_gained', 'count') / \
+                         slicer(df, 'run', 'posteam', 'yards_gained', 'count')
+    guy['def_stuff_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] <= 0)],
+                                'run', 'defteam', 'yards_gained', 'count') / \
+                         slicer(df, 'run', 'defteam', 'yards_gained', 'count')
+
+    guy['off_sack_%'] = slicer(df, 'pass', 'posteam', 'sack', 'sum') / \
+                       slicer(df, 'pass', 'posteam', 'sack', 'count')
+    guy['def_sack_%'] = slicer(df, 'pass', 'defteam', 'sack', 'sum') / \
+                       slicer(df, 'pass', 'defteam', 'sack', 'count')
+
+    guy['off_qb_hit_%'] = slicer(df, 'pass', 'posteam', 'qb_hit', 'sum') / \
+                         slicer(df, 'pass', 'posteam', 'qb_hit', 'count')
+    guy['def_qb_hit_%'] = slicer(df, 'pass', 'defteam', 'qb_hit', 'sum') / \
+                         slicer(df, 'pass', 'defteam', 'qb_hit', 'count')
 
     return guy
 
@@ -309,9 +338,10 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
     # print(tabulate(defense,headers='keys',tablefmt=tabulate_formats[4]))
 
     def_mean = (defense['def_qb_elo'] * defense['weight']).sum() / defense['weight'].sum()
-    defense = defense.groupby('team').apply(
-        lambda x: (x['def_qb_elo'] * x['weight']).sum() / x['weight'].sum()
-    )
+    wx = (defense['def_qb_elo'] * defense['weight'])
+    num = wx.groupby(defense['team']).sum()
+    den = defense['weight'].groupby(defense['team']).sum()
+    defense = (num / den)
     defense -= def_mean
     defense = defense.reset_index(name='def_qb_elo')
 
@@ -325,9 +355,10 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
     )
     # print(tabulate(guy,headers='keys',tablefmt=tabulate_formats[4]))
 
-    guy_weighted = guy.groupby('name').apply(
-        lambda x: (x['qb_elo'] * x['weight']).sum() / x['weight'].sum()
-    ).reset_index(name='weighted_qb_elo')
+    wx = guy['qb_elo'] * guy['weight']
+    num = wx.groupby(guy['name']).sum()
+    den = guy['weight'].groupby(guy['name']).sum()
+    guy_weighted = (num / den).reset_index(name='weighted_qb_elo')
 
     # sched = sched.merge(sched,guy,left_on=['away_qb_short'])
 
@@ -376,18 +407,18 @@ def comp_stats(stats, sched):
             col_ = col[9:]
             if 'off' in col:
                 if 'pass' in col:
-                    try: df[col] = (away[f'away_off_{col_}'][0] - home[f'home_def_{col_}'][0])*\
-                                   (away['away_off_pass_%'][0]+0.5)
+                    try: df[col] = (away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0])*\
+                                   (away['away_off_pass_%'].iloc[0]+0.5)
                     except Exception as e: pass
                 elif 'run' in col:
-                    try: df[col] = (away[f'away_off_{col_}'][0] - home[f'home_def_{col_}'][0])*\
-                                   (away['away_off_run_%'][0]+0.5)
+                    try: df[col] = (away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0])*\
+                                   (away['away_off_run_%'].iloc[0]+0.5)
                     except Exception as e: pass
                 else:
-                    try: df[col] = away[f'away_off_{col_}'][0] - home[f'home_def_{col_}'][0]
+                    try: df[col] = away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0]
                     except Exception as e: pass
             elif 'def' in col:
-                try: df[col] = away[f'away_def_{col_}'][0] - home[f'home_off_{col_}'][0]
+                try: df[col] = away[f'away_def_{col_}'].iloc[0] - home[f'home_off_{col_}'].iloc[0]
                 except Exception as e: print(e)
             else: print(f'no off or def in {col}')
         df_.append(df)
@@ -403,9 +434,6 @@ def prep_test_train(szn, week, lookback):
                    'roof','surface','temp','wind','away_qb_name','home_qb_name','away_coach','home_coach',
                    'referee']]
     sched = sched.loc[~((sched['season'] == szn) & (sched['week'] > week))].copy()
-
-    bad = sched[(sched['season'] == szn) & (sched['week'] > week)]
-    print(f"Rows with season={szn} and week>{week}: {len(bad)}")  # should print 0
 
     df = []
     szn_, week_, lookback_ = szn, week, lookback
@@ -465,7 +493,7 @@ def prep_test_train(szn, week, lookback):
         qbr_ = pd.concat(qbr_)
         qb, dee = calc_qb_elo(qbr_, sched)
 
-        sched_ = df.query(f'season=={s} & week=={w}')
+        sched_ = df.query(f'season=={s} & week=={w}').copy()
         sched_.loc[:, 'away_qb_short'] = sched_['away_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
         sched_.loc[:, 'home_qb_short'] = sched_['home_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
 
@@ -488,7 +516,7 @@ def prep_test_train(szn, week, lookback):
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
-    num_workers = max(1, num_cores // 2)
+    num_workers = max(1, num_cores // 4)
     # num_workers = 1
     print(f'Num workers: {num_workers} from {num_cores} cores!')
     args_list = [(s, w, lookback, pbp, sched, df) for s, w in tings]

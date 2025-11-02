@@ -42,7 +42,7 @@ def download_team_logos(teams, logo_dir='data/logos'):
                 print(f"Failed to download logo for {team} from {url}")
 
 
-def h_to_the_tml(pred, season, week, lookback):
+def h_to_the_tml(pred, season, week, lookback, tag):
     qb = pd.read_parquet(f'data/qb/qb_{season}_{week}_{lookback}.parquet')
 
     lines = data_pullson.pull_odds()
@@ -94,8 +94,8 @@ def h_to_the_tml(pred, season, week, lookback):
     all_teams = pd.concat([result['away_team'], result['home_team']]).unique()
     download_team_logos(all_teams, logo_dir='data/logos')
 
-    result['away_logo'] = result['away_team'].apply(lambda team: f'../logos/{team}.png')
-    result['home_logo'] = result['home_team'].apply(lambda team: f'../logos/{team}.png')
+    result['away_logo'] = result['away_team'].apply(lambda team: f'../../logos/{team}.png')
+    result['home_logo'] = result['home_team'].apply(lambda team: f'../../logos/{team}.png')
 
     result = result[['gameday', 'gametime',
                      'away_qb', 'away_qb_elo', 'away_logo', 'away_team',
@@ -113,7 +113,7 @@ def h_to_the_tml(pred, season, week, lookback):
 
     if not os.path.exists('data/results'):
         os.makedirs('data/results')
-    result.to_csv(f'data/results/results_{season}_{week}_{lookback}.csv')
+    result.to_csv(f'{tag}/results_{season}_{week}_{lookback}.csv')
 
     def style_fonts_and_borders(val):
         return 'font-size: 16px; font-family: Arial; border: 2px solid gray'
@@ -186,14 +186,14 @@ def h_to_the_tml(pred, season, week, lookback):
             .applymap(highlight_ud, subset=['away_team', 'home_team', 'pick'])
             )
     # IMPORTANT: disable escaping so that the <img> tags render as images.
-    html.to_html(f'data/results/html_{season}_{week}_{lookback}.html', escape=False)
+    html.to_html(f'{tag}/html_{season}_{week}_{lookback}.html', escape=False)
 
     print(tabulate(result, headers='keys'))
 
 def pull_bt(lookback):
     sched = pd.read_parquet('data/sched.parquet')
     sched.dropna(subset='result',inplace=True)
-    print(tabulate(sched.tail(5), headers='keys'))
+    # print(tabulate(sched.tail(5), headers='keys'))
     sched = sched[sched['game_type']=='REG'].groupby(['season','week']).agg('count').index.tolist()
     sched.reverse()
     for s, w in sched[:-lookback]:
@@ -292,14 +292,16 @@ def back_test(bt):
     print(len(big[big.dinner==1])/len(big))
 
 def run(season, week, lookback, bt=False):
-    if bt and os.path.exists(f'data/stats/dat_{season}_{week}_{lookback}.parquet'):
-            df = pd.read_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    tag = f"data/results/{season}_{week}_{lookback}"
+
+    if bt and os.path.exists(f'{tag}/dat_{season}_{week}_{lookback}.parquet'):
+            df = pd.read_parquet(f'{tag}/dat_{season}_{week}_{lookback}.parquet')
     else: df = data_crunchski_2.prep_test_train(season, week, lookback)
 
-    if not os.path.exists('data/stats'): os.makedirs('data/stats')
-    df.to_parquet(f'data/stats/dat_{season}_{week}_{lookback}.parquet')
+    if not os.path.exists(f'{tag}'): os.makedirs(tag, exist_ok=True)
+    df.to_parquet(f'{tag}/dat_{season}_{week}_{lookback}.parquet')
 
-    pred = model_shredski.modelo(df, season, week)
+    pred = model_shredski.modelo(df, season, week, tag)
     return pred
 
 
@@ -309,16 +311,16 @@ if __name__ == '__main__':
     # data_pullson.pull_ngs(range(1999, 2025))
 
     season = 2025
-    week = 5
+    week = 9
     lookback = 40
 
     sched = pd.read_parquet('data/sched.parquet')
-    utils.pdf(sched[(sched['season']==season) & (sched['week']==week)])
+    # utils.pdf(sched[(sched['season']==season) & (sched['week']==week)])
 
-    # pull_bt(20)
-    # back_test(20)
+    # pull_bt(40)
+    # back_test(40)
 
     pred = run(season, week, lookback, bt=True).round(1)
     utils.pdf(pred)
-    h_to_the_tml(pred, season, week, lookback)
+    h_to_the_tml(pred, season, week, lookback, tag = f"data/results/{season}_{week}_{lookback}")
 
