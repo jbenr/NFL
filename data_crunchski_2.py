@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import utils
-from opt_einsum.blas import tensor_blas
+# from opt_einsum.blas import tensor_blas
 from tabulate import tabulate, tabulate_formats
 from scipy import stats
 from datetime import datetime
@@ -432,7 +432,7 @@ def prep_test_train(szn, week, lookback):
     sched = pd.read_parquet('data/sched.parquet')
     sched = sched[['season','week','game_type','away_team','away_score','home_team','home_score','away_rest','home_rest',
                    'roof','surface','temp','wind','away_qb_name','home_qb_name','away_coach','home_coach',
-                   'referee']]
+                   'referee','location']]
     sched = sched.loc[~((sched['season'] == szn) & (sched['week'] > week))].copy()
 
     df = []
@@ -530,4 +530,400 @@ def prep_test_train(szn, week, lookback):
     return data
 
 
-# print(tabulate(prep_test_train(2024, 14, 10).tail(5),headers='keys',tablefmt=tabulate_formats[1]))
+import numpy as np
+import pandas as pd
+
+# --------------------------
+# Config / metadata
+# --------------------------
+TEAM_META = {  # team: (conference, division)
+    "BUF": ("AFC","EAST"), "MIA": ("AFC","EAST"), "NE":  ("AFC","EAST"), "NYJ": ("AFC","EAST"),
+    "BAL": ("AFC","NORTH"),"CIN": ("AFC","NORTH"),"CLE": ("AFC","NORTH"),"PIT": ("AFC","NORTH"),
+    "HOU": ("AFC","SOUTH"),"IND": ("AFC","SOUTH"),"JAX": ("AFC","SOUTH"),"TEN": ("AFC","SOUTH"),
+    "DEN": ("AFC","WEST"), "KC":  ("AFC","WEST"), "LV":  ("AFC","WEST"), "LAC": ("AFC","WEST"),
+    "DAL": ("NFC","EAST"), "NYG": ("NFC","EAST"), "PHI": ("NFC","EAST"), "WAS": ("NFC","EAST"),
+    "CHI": ("NFC","NORTH"),"DET": ("NFC","NORTH"),"GB":  ("NFC","NORTH"),"MIN": ("NFC","NORTH"),
+    "ATL": ("NFC","SOUTH"),"CAR": ("NFC","SOUTH"),"NO":  ("NFC","SOUTH"),"TB":  ("NFC","SOUTH"),
+    "ARI": ("NFC","WEST"), "LAR": ("NFC","WEST"), "SEA": ("NFC","WEST"), "SF":  ("NFC","WEST"),
+    # tolerate "LA" if it appears in historical data as Rams
+    "LA":  ("NFC","WEST"),
+}
+
+# Any playoff game is max-importance
+NON_REG_MAX = {"WC", "DIV", "CON", "CONF", "SB"}
+
+# --------------------------
+# Helpers
+# --------------------------
+def _records_pregame(df):
+    """
+    Per-game pregame record strings/wins/losses/ties for home & away.
+    Only counts games with both scores present; ties allowed.
+    """
+    d = df.copy()
+    have_score = d["home_score"].notna() & d["away_score"].notna()
+    home_win = (d["home_score"] > d["away_score"]) & have_score
+    tie      = (d["home_score"] == d["away_score"]) & have_score
+
+    rows = []
+    for side, opp, win_expr in [("home","away",home_win), ("away","home",~home_win & ~tie & have_score)]:
+        r = d.loc[:, ["season","week",f"{side}_team"]].rename(columns={f"{side}_team":"team"})
+        r["win"] = win_expr.astype(int)
+        r["tie"] = tie.astype(int)
+        r["played"] = have_score.astype(int)
+        rows.append(r)
+    long = pd.concat(rows, ignore_index=True)
+
+    long = long.sort_values(["season","team","week"])
+    grp = long.groupby(["season","team"], sort=False)
+    long["W_pg"] = grp["win"].cumsum().shift(fill_value=0)
+    long["T_pg"] = grp["tie"].cumsum().shift(fill_value=0)
+    long["G_pg"] = grp["played"].cumsum().shift(fill_value=0)
+    long["L_pg"] = (long["G_pg"] - long["W_pg"] - long["T_pg"]).clip(lower=0)
+
+    rec = long[["season","week","team","W_pg","L_pg","T_pg"]].copy()
+    rec["record_str"] = rec["W_pg"].astype(int).astype(str) + "-" + rec["L_pg"].astype(int).astype(str)
+    has_t = rec["T_pg"] > 0
+    rec.loc[has_t, "record_str"] += "-" + rec.loc[has_t, "T_pg"].astype(int).astype(str)
+    return rec
+
+def _conf_div(df):
+    safe = lambda t: TEAM_META.get(t, ("UNK","UNK"))
+    c_home, d_home = zip(*df["home_team"].map(safe))
+    c_away, d_away = zip(*df["away_team"].map(safe))
+    df["conf_home"], df["div_home"] = c_home, d_home
+    df["conf_away"], df["div_away"] = c_away, d_away
+    df["is_div"] = (df["div_home"] == df["div_away"]).astype(int)
+    df["same_conf"] = (df["conf_home"] == df["conf_away"]).astype(int)
+    return df
+
+def _reg_weeks(df):
+    """Dynamic number of REG weeks per season (handles 16/17/18...)."""
+    return df[df["game_type"]=="REG"].groupby("season")["week"].max()
+
+def _nth_largest(arr, n):
+    """n is 1-based (7-> seventh largest). Returns -inf if not enough elements."""
+    if len(arr) < n:
+        return -np.inf
+    idx = np.argpartition(arr, -n)[-n:]
+    return arr[idx].min()
+
+def _build_h2h_proxy(df):
+    """
+    Build head-to-head proxy for current season, pregames only.
+    Returns a dict keyed by (season, team, opp) -> {+1: team has H2H edge, -1: opp edge, 0: none}.
+    We use completed earlier meeting(s) between the same two teams; 1 win edge => +1, -1 => -1, else 0.
+    """
+    d = df.copy()
+    played = d["home_score"].notna() & d["away_score"].notna()
+    d = d[played]
+
+    # Expand to long pairs for counting H2H wins
+    a = d[["season","week","home_team","away_team","home_score","away_score"]].copy()
+    a["home_win"] = (a["home_score"] > a["away_score"]).astype(int)
+    a["away_win"] = (a["away_score"] > a["home_score"]).astype(int)
+
+    # For each direction
+    ha = a.groupby(["season","home_team","away_team"], as_index=False)["home_win"].sum().rename(
+        columns={"home_team":"team","away_team":"opp","home_win":"wins_as_home"})
+    aw = a.groupby(["season","away_team","home_team"], as_index=False)["away_win"].sum().rename(
+        columns={"away_team":"team","home_team":"opp","away_win":"wins_as_away"})
+
+    comb = pd.merge(ha, aw, on=["season","team","opp"], how="outer").fillna(0)
+    comb["h2h_wins"] = comb["wins_as_home"] + comb["wins_as_away"]
+
+    # Also compute opponent's h2h wins quickly by flipping keys
+    comb_flip = comb.rename(columns={"team":"opp","opp":"team","h2h_wins":"opp_h2h_wins"})[["season","team","opp","opp_h2h_wins"]]
+    comb = comb.merge(comb_flip, on=["season","team","opp"], how="left").fillna(0)
+
+    # Edge: sign of (my wins - opp wins). Map to -1/0/+1
+    comb["edge"] = np.sign(comb["h2h_wins"] - comb["opp_h2h_wins"]).astype(int)
+
+    # Dict
+    return {(int(r.season), str(r.team), str(r.opp)): int(r.edge) for r in comb.itertuples(index=False)}
+
+def _early_floor(row, side):
+    """
+    Early/mid-season baseline so games don't collapse to 0.10 when hope exists.
+    Scales with division > conference > inter-conference + a 'hope' term
+    based on the optimistic cutline (win+help feasible).
+    """
+    is_div = float(row["is_div"])
+    same_conf = float(row["same_conf"])
+
+    wins   = float(row.get(f"{side}_wins", 0.0) or 0.0)
+    cutopt = float(row.get(f"{side}_cutoff7_opt", 0.0) or 0.0)
+    left   = float(row.get(f"{side}_games_left", 0.0) or 0.0)
+
+    hope_raw = (wins + left) - cutopt          # positive => there exists a path to be ≥ cutline
+    hope_clip = float(np.clip((hope_raw + 1.0)/3.0, 0.0, 1.0))  # smooth 3-win band
+
+    late = float(row["late_w"])
+    early_weight = 1.0 - late
+
+    base = 0.12 + 0.10*same_conf + 0.20*is_div    # 0.12 IC, 0.22 conf, 0.32 div
+    floor_val = base + 0.18*hope_clip
+
+    return float(floor_val * early_weight)
+
+# --------------------------
+# Main engine
+# --------------------------
+def matchup_importance(sched: pd.DataFrame) -> pd.DataFrame:
+    df = sched.copy()
+    df = _conf_div(df)
+
+    # Pregame records for all relevant games (REG+PO)
+    rec = _records_pregame(df[df["game_type"].isin(["REG","WC","DIV","CON","CONF","SB"])])
+    for side in ("home","away"):
+        m = rec.rename(columns={
+            "team":f"{side}_team","W_pg":f"{side}_wins","L_pg":f"{side}_losses","T_pg":f"{side}_ties","record_str":f"{side}_record"
+        })
+        df = df.merge(m, on=["season","week",f"{side}_team"], how="left")
+
+    # Dynamic season lengths and remaining REG games (inclusive of current week)
+    reg_last = _reg_weeks(df)
+    df["reg_last_week"] = df["season"].map(reg_last).fillna(df["week"])
+    df["home_games_left"] = (df["reg_last_week"] - df["week"] + 1).clip(lower=0).astype(int)
+    df["away_games_left"] = df["home_games_left"].astype(int)
+
+    # Late-season scaler
+    with np.errstate(divide='ignore', invalid='ignore'):
+        df["late_w"] = (df["week"] / df["reg_last_week"].replace(0, np.nan)).clip(0,1).fillna(0)
+
+    # Head-to-head proxy (this season)
+    h2h = _build_h2h_proxy(df)
+
+    def side_block(g: pd.DataFrame, side: str) -> pd.DataFrame:
+        # Conference name for this side
+        conf_name = g[f"conf_{side}"].iloc[0]
+
+        # All rows in this (season, week) that belong to this conference on either side
+        all_rows = df[
+            (df["season"] == g["season"].iloc[0]) &
+            (df["week"]   == g["week"].iloc[0]) &
+            ((df["conf_home"] == conf_name) | (df["conf_away"] == conf_name))
+        ]
+
+        # Snapshot per team in conference: current wins and remaining games
+        hh = all_rows[["home_team","home_wins","home_ties","home_games_left"]].rename(
+            columns={"home_team":"team","home_wins":"wins","home_ties":"ties","home_games_left":"left"})
+        aa = all_rows[["away_team","away_wins","away_ties","away_games_left"]].rename(
+            columns={"away_team":"team","away_wins":"wins","away_ties":"ties","away_games_left":"left"})
+        snap = pd.concat([hh,aa], ignore_index=True).groupby("team", as_index=False).max(numeric_only=True)
+
+        # Ensure full conference membership (16 teams historically; tolerate variations)
+        conf_teams = [t for t,(c,_) in TEAM_META.items() if c == conf_name]
+        if len(snap) < len(conf_teams):
+            miss = sorted(set(conf_teams) - set(snap["team"]))
+            if miss:
+                # choose modal remaining among present
+                gr_mode = int(pd.Series(snap["left"]).mode(dropna=True).iloc[0]) if len(snap)>0 else 0
+                snap = pd.concat([snap, pd.DataFrame({"team":miss,"wins":0,"ties":0,"left":gr_mode})], ignore_index=True)
+
+        # Compute others' max_final = wins + left (ties ignored for simplicity)
+        snap["max_final"] = snap["wins"].astype(int) + snap["left"].astype(int)
+
+        # For volatility: where is the current conf-best?
+        best_now = int(snap["wins"].max().item()) if len(snap) else 0
+
+        # For each row in g, compute cutlines and flags
+        out_rows = []
+        for idx, row in g.iterrows():
+            me    = row[f"{side}_team"]
+            w     = int(row.get(f"{side}_wins", 0) or 0)
+            left  = int(row.get(f"{side}_games_left", 0) or 0)
+            opp   = row["away_team"] if side=="home" else row["home_team"]
+
+            # Others' max_final excluding me
+            arr_others = snap.set_index("team")["max_final"].drop(index=me, errors="ignore").values
+
+            base_cut = _nth_largest(arr_others, 7)  # 7th largest among others
+
+            # Tiebreak proxy:
+            #   - Pessimistic: assume ties break against you (+0.5)
+            #   - Optimistic:  assume ties break for you (-0.5)
+            #   - H2H edge: small nudge (-0.25 if you have edge; +0.25 if you are behind)
+            h2h_edge = h2h.get((int(row["season"]), str(me), str(opp)), 0)
+            cut_pess = base_cut + 0.5 + ( -0.25 * h2h_edge )  # if edge=+1, reduce pess cut a bit
+            cut_opt  = base_cut - 0.5 + ( -0.25 * h2h_edge )
+
+            # Alive assessments
+            alive_pess = (w + left >= cut_pess)     # can still tie/exceed pess cut? (strict-ish due to +0.5)
+            alive_opt  = (w + left >= cut_opt)      # optimistic board
+
+            # Strict elimination only if even optimistic path fails
+            elim_strict = (not alive_opt)
+
+            # Clinched under pessimistic (already above the pessimistic 7-seed cut)
+            clinch_pess = (w > cut_pess)
+
+            # Must-win under pessimistic (to keep pessimistic path open)
+            mustwin_pess = (not elim_strict) and (not clinch_pess) and (left > 0) and (w + (left - 1) < cut_pess)
+
+            # Help paths
+            help_path_live = (not alive_pess) and alive_opt
+
+            # Crude division-title-with-help proxy: still in division race but need help; weight only for in-conf/div slates
+            div_title_help_live = bool(help_path_live) and bool(row["same_conf"])
+
+            # Volatility & “elasticity” proxies
+            seed_vol = float(np.clip((best_now - w) / max(best_now, 1), 0, 1))
+            # normalized rank width proxy (bigger possible swing -> more elastic)
+            better = int((snap["wins"] > (w + left)).sum())
+            worse  = int((snap["wins"] < w).sum())
+            best_rank  = 1 + better
+            worst_rank = len(snap) - worse
+            seed_elastic_n = float(np.clip((worst_rank - best_rank) / max(len(snap)-1, 1), 0, 1))
+
+            # Top-1 & seed-locked proxies
+            top1_locked = (best_rank == 1 and worst_rank == 1)
+            seed_locked = (best_rank == worst_rank)
+
+            out_rows.append({
+                "idx": idx,
+                f"{side}_cutoff7_pess": float(cut_pess),
+                f"{side}_cutoff7_opt":  float(cut_opt),
+                f"{side}_elim":         bool(elim_strict),
+                f"{side}_clinched":     bool(clinch_pess),
+                f"{side}_mustwin":      bool(mustwin_pess),
+                f"{side}_help_path_live": bool(help_path_live),
+                f"{side}_div_title_help_live": bool(div_title_help_live),
+                f"{side}_seed_vol":     seed_vol,
+                f"{side}_seed_elastic_n": seed_elastic_n,
+                f"{side}_best_rank":    int(best_rank),
+                f"{side}_worst_rank":   int(worst_rank),
+                f"{side}_top1_locked":  bool(top1_locked),
+                f"{side}_seed_locked":  bool(seed_locked),
+            })
+
+        out = pd.DataFrame(out_rows).set_index("idx").sort_index()
+        return out
+
+    # Apply side logic per (season, week, conference_of_side)
+    side_frames = []
+    for side in ("home","away"):
+        key = ["season","week",f"conf_{side}"]
+        side_out = df.groupby(key, group_keys=False).apply(lambda g: side_block(g, side))
+        side_frames.append(side_out)
+
+    extra = pd.concat(side_frames, axis=1)
+    df = pd.concat([df, extra], axis=1)
+
+    # Division/conf weight (for importance blend)
+    df["home_div_w"] = np.where(df["is_div"].astype(bool), 1.0, np.where(df["same_conf"].astype(bool), 0.6, 0.3))
+    df["away_div_w"] = df["home_div_w"]
+
+    # --------------------------
+    # Importance formula (updated)
+    # --------------------------
+    def _importance(row, side):
+        if row["game_type"] in NON_REG_MAX:
+            return 1.0
+
+        wins    = int(row.get(f"{side}_wins", 0) or 0)
+        cut_p   = float(row.get(f"{side}_cutoff7_pess", 0.0) or 0.0)
+        me_left = int(row.get(f"{side}_games_left", 0) or 0)
+
+        lev = float(np.clip(1 - max(0.0, (cut_p - wins)) / max(cut_p, 1.0), 0, 1))
+
+        help_bonus     = 1.0 if bool(row.get(f"{side}_help_path_live", False)) else 0.0
+        div_help_bonus = 1.0 if bool(row.get(f"{side}_div_title_help_live", False)) else 0.0
+        help_term = 0.25 * max(help_bonus, div_help_bonus) * float(row["late_w"])  # stronger late
+
+        base = (0.30*lev
+                + 0.20*float(row[f"{side}_div_w"])
+                + 0.15*float(row["late_w"])
+                + 0.15*float(row.get(f"{side}_seed_vol", 0.0))
+                + 0.15*float(row.get(f"{side}_seed_elastic_n", 0.0))
+                + help_term)
+
+        # Clamps & floors
+        if bool(row.get(f"{side}_elim", False)):
+            # If truly eliminated (even optimistic path fails)
+            if row["late_w"] > 0.7:
+                base = min(base, 0.12)
+            else:
+                base = min(base, 0.20)
+
+        if bool(row.get(f"{side}_top1_locked", False)):
+            base = 0.05
+
+        if bool(row.get(f"{side}_seed_locked", False)):
+            base = min(base, 0.06)
+
+        if bool(row.get(f"{side}_mustwin", False)):
+            base = max(base, 0.97)
+
+        if bool(row.get(f"{side}_help_path_live", False)) and (row["late_w"] > 0.7) and (not bool(row.get(f"{side}_elim", False))):
+            base = max(base, 0.82)
+
+        if bool(row.get(f"{side}_div_title_help_live", False)) and row["late_w"] > 0.7:
+            base = max(base, 0.82)
+
+        # Early/mid-season floor to prevent 0.10 spam when hope exists
+        base = max(base, _early_floor(row, side))
+
+        return float(np.clip(base, 0, 1))
+
+    df["home_importance"] = df.apply(lambda r: _importance(r, "home"), axis=1)
+    df["away_importance"] = df.apply(lambda r: _importance(r, "away"), axis=1)
+    df["importance_diff"] = df["home_importance"] - df["away_importance"]
+
+    # Output columns
+    keep = [
+        "game_id","season","game_type","week",
+        "home_team","home_record","away_team","away_record",
+        "home_importance","away_importance","importance_diff",
+
+        # elimination / clinch / must-win + late flags
+        "home_elim","home_clinched","home_mustwin","away_elim","away_clinched","away_mustwin",
+        "home_help_path_live","away_help_path_live","home_div_title_help_live","away_div_title_help_live",
+
+        # dynamic season context
+        "home_games_left","away_games_left","late_w",
+
+        # cutlines (pess/opt) for transparency
+        "home_cutoff7_pess","home_cutoff7_opt","away_cutoff7_pess","away_cutoff7_opt",
+
+        # rank/seed diagnostics
+        "home_best_rank","home_worst_rank","home_top1_locked","home_seed_locked",
+        "away_best_rank","away_worst_rank","away_top1_locked","away_seed_locked",
+    ]
+
+    # Some columns may be missing for years with incomplete data; fill if needed
+    for c in keep:
+        if c not in df.columns:
+            df[c] = np.nan if c.endswith(("_pess","_opt","_rank","_left","late_w")) else False
+
+    return df[keep].sort_values(["season","week","game_id"]).reset_index(drop=True)
+
+
+def additional_features(df_):
+    df = df_.copy()
+    # imp = matchup_importance(df)
+    # df = df.merge(
+    #     imp[[
+    #         "game_id","home_record","away_record",
+    #         "home_importance","away_importance","importance_diff"
+    #     ]],
+    #     on="game_id", how="left"
+    # )
+
+    df["away_rest_adv"] = df["away_rest"] - df["home_rest"]
+    df["home_field_adv"] = (df["location"] == "Home").astype(int) if "location" in df.columns else 0
+    # df["away_game_importance"] = df["away_importance"] - df["home_importance"]
+    return df
+
+
+# sched = pd.read_parquet("data/sched.parquet")
+# imp = matchup_importance(sched)
+# utils.pdf(imp[(imp["season"]==2025)&(imp["week"]==11)][[
+#     "home_team","home_record","away_team","away_record",
+#     "home_importance","away_importance"
+# ]])
+# utils.pdf(imp[(imp["season"]==2024)&(imp["week"]>=18)][[
+#     "home_team","home_record","away_team","away_record",
+#     "home_importance","away_importance"
+# ]])
+# utils.pdf(imp[(imp["season"]==2024)&(imp["week"]>=18)])

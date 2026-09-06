@@ -1,35 +1,25 @@
-import os
-import json
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
-from matplotlib.patches import Patch
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-from PIL import Image
 
-from tensorflow import keras
-from keras.models import Sequential
-from keras.layers import Dense, Dropout
-import tensorflow as tf
-
-import sklearn
-from sklearn.model_selection import train_test_split
-
-
-# -------- helpers (clean, with team colors + swapped logos + relabels) --------
-
-import os
 from pathlib import Path
 from textwrap import shorten
 import json
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+import sklearn
+from sklearn.model_selection import train_test_split
+
+from tensorflow import keras
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Input, Dense, Dropout
+from tensorflow.keras import initializers
+import tensorflow as tf
+tf.keras.mixed_precision.set_global_policy('float32')
+
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"           # hide INFO/WARN
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"          # silence oneDNN banner
 
 
 def _pretty_feat(name: str) -> str:
@@ -327,11 +317,9 @@ def integrated_gradients(model, x_batch: tf.Tensor, baseline: tf.Tensor, m_steps
     return attributions.numpy(), base_pred, f_x
 
 
-
-
 # -------- model --------
 
-def modelo(data, season, week, tag):
+def modelo(data, season, week, tag, bt: bool = False):
     dat = data.copy()
     dat.loc[:, 'result'] = dat['away_score'] - dat['home_score']
 
@@ -351,7 +339,8 @@ def modelo(data, season, week, tag):
         "away_off_explosive_pass_%", "away_def_explosive_pass_%",
         "away_off_stuff_%", "away_def_stuff_%",
         "away_off_sack_%", "away_def_sack_%",
-        "away_off_qb_hit_%", "away_def_qb_hit_%"
+        "away_off_qb_hit_%", "away_def_qb_hit_%",
+        "away_rest_adv", "home_field_adv"
     ]
 
     preds = dat[(dat.season == season) & (dat.week == week)].copy()
@@ -368,16 +357,18 @@ def modelo(data, season, week, tag):
     keras.losses.sign_penalty = sign_penalty
 
     # model builder
-    def create_model():
-        m = Sequential()
-        m.add(Dropout(0.1))
-        m.add(Dense(X.shape[1], input_dim=X.shape[1], activation='elu'))
-        m.add(Dense((X.shape[1] + 1) // 2, activation='elu'))
-        m.add(Dense((X.shape[1] + 1) // 3, activation='elu'))
-        m.add(Dense(1, activation='linear'))
+    def create_model(n_features: int):
+        m = Sequential([
+            Input(shape=(n_features,)),  # <-- explicit input
+            Dropout(0.10),
+            Dense(n_features, activation="elu", kernel_initializer=initializers.HeNormal()),  # good with ELU
+            Dense((n_features + 1) // 2, activation="elu", kernel_initializer=initializers.HeNormal()),
+            Dense((n_features + 1) // 3, activation="elu", kernel_initializer=initializers.HeNormal()),
+            Dense(1, activation="linear")
+        ])
         return m
 
-    # permutation importance
+    # permutation importance (only used when bt=False)
     def permutation_importance(model, X_val, y_val, loss_fn, random_state=42):
         rng = np.random.default_rng(random_state)
         base_pred = model.predict(X_val, verbose=0).reshape(-1)
@@ -403,72 +394,84 @@ def modelo(data, season, week, tag):
     X_tr, X_val, y_tr, y_val = train_test_split(X, Y, test_size=0.2, random_state=1337)
     feat_means = X.mean()
 
-    all_imps = []
+    all_imps = [] if not bt else None
     all_preds = []
-    edges_runs = []                      # collect per-run matchup edges
-    X_pred = preds[features].copy()      # fixed prediction design for all runs
+    edges_runs = [] if not bt else None
+    X_pred = preds[features].copy()
     iterations = 100
 
     for i in range(iterations):
-        model = create_model()
+        model = create_model(X.shape[1])
         opt = keras.optimizers.Adam(amsgrad=True)
         model.compile(optimizer=opt, loss=sign_penalty)
         reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5)
-        model.fit(X, Y, epochs=100, callbacks=[reduce_lr])
 
-        train_preds = model.predict(X)
-        test_preds = model.predict(preds[features])
+        verbose = 1 if not bt else 0
+        model.fit(X, Y, epochs=100, callbacks=[reduce_lr], verbose=verbose)
 
-        r2 = sklearn.metrics.r2_score(Y, train_preds)
-        mae = sklearn.metrics.mean_absolute_error(Y, train_preds)
-        mse = sklearn.metrics.mean_squared_error(Y, train_preds)
-        print(f'\nR2: {r2}\nMAE:{mae}\nMSE:{mse}\n')
+        train_preds = model.predict(X, verbose=verbose)
+        test_preds = model.predict(preds[features], verbose=verbose)
 
-        if r2 > 0:
-            run_df = preds[['away_team', 'home_team']].copy()
-            run_df['prediction'] = np.asarray(test_preds).reshape(-1).astype(float)
-            all_preds.append(run_df)
+        if not bt:
+            r2 = sklearn.metrics.r2_score(Y, train_preds)
+            mae = sklearn.metrics.mean_absolute_error(Y, train_preds)
+            mse = sklearn.metrics.mean_squared_error(Y, train_preds)
+            print(f"\nIteration {i + 1}/{iterations}")
+            print(f"R²:  {r2:.4f}")
+            print(f"MAE: {mae:.4f}")
+            print(f"MSE: {mse:.4f}")
 
-            baseline_vec = tf.constant(feat_means.values[None, :], dtype=tf.float32)  # dataset mean as baseline
-            # baseline_vec = tf.zeros((1, X_pred.shape[1]), dtype=tf.float32)
+        # Always collect predictions for results
+        run_df = preds[['away_team', 'home_team']].copy()
+        run_df['prediction'] = np.asarray(test_preds).reshape(-1).astype(float)
+        all_preds.append(run_df)
+
+        if not bt:
+            # Integrated Gradients (explainability)
+            baseline_vec = tf.constant(feat_means.values[None, :], dtype=tf.float32)  # mean baseline
             ig_attr, base_vals, preds_vals = integrated_gradients(
                 model,
                 tf.constant(X_pred.values, dtype=tf.float32),
                 baseline=baseline_vec,
                 m_steps=64,
             )
-
             edges_runs.append(ig_attr)
 
-        imp = permutation_importance(model, X_val, y_val, sign_penalty, random_state=42 + i)
-        all_imps.append(imp)
+            # Permutation importance for global FI chart
+            imp = permutation_importance(model, X_val, y_val, sign_penalty, random_state=42 + i)
+            all_imps.append(imp)
 
-    # feature importance: avg + std; save chart
-    imp_df = pd.concat(all_imps, axis=1) if all_imps else pd.DataFrame(index=features)
-    avg_imp = imp_df.mean(axis=1).fillna(0.0)
-    std_imp = imp_df.std(axis=1).fillna(0.0)
+            del model
+            tf.keras.backend.clear_session()
 
-    if all_preds:
-        stacked_preds = pd.concat(all_preds, ignore_index=True)
-        avg_pred_spread = float(stacked_preds['prediction'].mean())
-    else:
-        avg_pred_spread = float('nan')
+    # Global Feature Importance chart (only when bt=False)
+    if not bt:
+        imp_df = pd.concat(all_imps, axis=1) if all_imps else pd.DataFrame(index=features)
+        avg_imp = imp_df.mean(axis=1).fillna(0.0)
+        std_imp = imp_df.std(axis=1).fillna(0.0)
 
-    os.makedirs(tag, exist_ok=True)
-    fi_title = (
+        # Mean predicted spread across runs/games
+        if all_preds:
+            stacked_preds = pd.concat(all_preds, ignore_index=True)
+            avg_pred_spread = float(stacked_preds['prediction'].mean())
+        else:
+            avg_pred_spread = float('nan')
+
+        os.makedirs(tag, exist_ok=True)
+        fi_title = (
             f"Aggregated Feature Importance — {season} Week {week} "
             f"(Lookback: {tag.split('_')[-1] if '_' in tag else '—'})\n"
             "Error bars show ±1 std across model runs"
             + (f"   |   Mean predicted spread: {avg_pred_spread:+.1f}" if np.isfinite(avg_pred_spread) else "")
-    )
-    save_feature_importance_hbar(
-        mean_imp=avg_imp,
-        std_imp=std_imp,
-        title=fi_title,
-        path=os.path.join(tag, "feature_importance.png"),
-    )
+        )
+        save_feature_importance_hbar(
+            mean_imp=avg_imp,
+            std_imp=std_imp,
+            title=fi_title,
+            path=os.path.join(tag, "feature_importance.png"),
+        )
 
-    # aggregate predictions across runs -> mean + variance
+    # Aggregate predictions across runs -> mean + variance
     if not all_preds:
         results = preds[['away_team', 'home_team']].copy()
         results['prediction'] = np.nan
@@ -484,27 +487,38 @@ def modelo(data, season, week, tag):
 
     results['prediction'] = results['prediction'].round(1)
 
-    # holistic edges: average edges across valid runs
-    try:
-        if len(edges_runs) > 0:
-            edges_stack = np.stack(edges_runs, axis=0)     # (runs, games, features)
-            avg_edges = edges_stack.mean(axis=0)           # (games, features)
-            feature_order = list(avg_imp.sort_values(ascending=False).index)
-            for i in range(len(preds)):
-                aw = preds.iloc[i]['away_team']
-                hm = preds.iloc[i]['home_team']
-                ser = pd.Series(avg_edges[i, :], index=features)
-                pred_val = float(results.iloc[i]['prediction']) if 'prediction' in results.columns else None
-                save_matchup_edges_hbar(
-                    edge_series=ser,
-                    away_team=aw,
-                    home_team=hm,
-                    path=os.path.join(tag, f"edge_{aw}_@_{hm}.png"),
-                    feature_order=feature_order,
-                    add_logos=True,
-                    pred_value=pred_val
-                )
-    except Exception:
-        pass
+    # Edge charts per game (only when bt=False)
+    if not bt:
+        try:
+            if edges_runs:
+                edges_stack = np.stack(edges_runs, axis=0)     # (runs, games, features)
+                avg_edges = edges_stack.mean(axis=0)           # (games, features)
+
+                # Order features by global importance if we computed it; else use original order
+                if 'avg_imp' in locals():
+                    feature_order = list(avg_imp.sort_values(ascending=False).index)
+                else:
+                    feature_order = features
+
+                for i in range(len(preds)):
+                    aw = preds.iloc[i]['away_team']
+                    hm = preds.iloc[i]['home_team']
+                    ser = pd.Series(avg_edges[i, :], index=features)
+                    pred_val = float(results.iloc[i]['prediction']) if 'prediction' in results.columns else None
+                    save_matchup_edges_hbar(
+                        edge_series=ser,
+                        away_team=aw,
+                        home_team=hm,
+                        path=os.path.join(tag, f"edge_{aw}_@_{hm}.png"),
+                        feature_order=feature_order,
+                        add_logos=True,
+                        pred_value=pred_val
+                    )
+        except Exception:
+            pass
 
     return results[['away_team', 'home_team', 'prediction', 'variance']]
+
+
+if __name__ == "__main__":
+    None
