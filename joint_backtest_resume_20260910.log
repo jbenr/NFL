@@ -1,0 +1,495 @@
+  features  cached (2025 wk22, lookback 20, legacy)
+Weather: forecast; outdoor temperature missing 2012/2012
+baseline: 2017 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2017 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2018 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2019 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2020 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2021 wk22
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2022 wk22
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk9
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk10
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk11
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk12
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk13
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk14
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk15
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk16
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk17
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk18
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk19
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk20
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk21
+Joint spread: cached
+Joint total: cached
+baseline: 2023 wk22
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk1
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk2
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk3
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk4
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk5
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk6
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk7
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk8
+Joint spread: cached
+Joint total: cached
+baseline: 2024 wk9
+Joint spread: cached
+Joint total (2024 wk9):   0%|          | 0/100 [00:00<?, ?it/s]Joint total (2024 wk9):   1%|          | 1/100 [00:06<11:24,  6.91s/it]Joint total (2024 wk9):   5%|▌         | 5/100 [00:10<02:55,  1.84s/it]Joint total (2024 wk9):   9%|▉         | 9/100 [00:14<02:03,  1.35s/it]Joint total (2024 wk9):  10%|█         | 10/100 [00:14<01:43,  1.15s/it]Joint total (2024 wk9):  13%|█▎        | 13/100 [00:18<01:43,  1.19s/it]Joint total (2024 wk9):  15%|█▌        | 15/100 [00:18<01:14,  1.14it/s]Joint total (2024 wk9):  17%|█▋        | 17/100 [00:22<01:35,  1.15s/it]Joint total (2024 wk9):  20%|██        | 20/100 [00:22<00:58,  1.36it/s]Joint total (2024 wk9):  21%|██        | 21/100 [00:26<01:33,  1.19s/it]Joint total (2024 wk9):  22%|██▏       | 22/100 [00:26<01:18,  1.00s/it]Joint total (2024 wk9):  24%|██▍       | 24/100 [00:26<00:52,  1.46it/s]Joint total (2024 wk9):  25%|██▌       | 25/100 [00:29<01:34,  1.25s/it]Joint total (2024 wk9):  26%|██▌       | 26/100 [00:30<01:15,  1.02s/it]Joint total (2024 wk9):  28%|██▊       | 28/100 [00:30<00:47,  1.51it/s]Joint total (2024 wk9):  29%|██▉       | 29/100 [00:33<01:31,  1.28s/it]Joint total (2024 wk9):  30%|███       | 30/100 [00:33<01:10,  1.01s/it]Joint total (2024 wk9):  31%|███       | 31/100 [00:34<00:53,  1.28it/s]Joint total (2024 wk9):  32%|███▏      | 32/100 [00:34<00:41,  1.64it/s]Joint total (2024 wk9):  33%|███▎      | 33/100 [00:37<01:34,  1.42s/it]Joint total (2024 wk9):  34%|███▍      | 34/100 [00:37<01:10,  1.07s/it]Joint total (2024 wk9):  35%|███▌      | 35/100 [00:38<00:51,  1.26it/s]Joint total (2024 wk9):  36%|███▌      | 36/100 [00:38<00:38,  1.67it/s]Joint total (2024 wk9):  37%|███▋      | 37/100 [00:41<01:32,  1.46s/it]Joint total (2024 wk9):  38%|███▊      | 38/100 [00:41<01:07,  1.08s/it]Joint total (2024 wk9):  39%|███▉      | 39/100 [00:42<00:48,  1.25it/s]Joint total (2024 wk9):  40%|████      | 40/100 [00:42<00:36,  1.63it/s]Joint total (2024 wk9):  41%|████      | 41/100 [00:45<01:27,  1.48s/it]Joint total (2024 wk9):  42%|████▏     | 42/100 [00:45<01:04,  1.12s/it]Joint total (2024 wk9):  43%|████▎     | 43/100 [00:46<00:46,  1.23it/s]Joint total (2024 wk9):  44%|████▍     | 44/100 [00:46<00:34,  1.63it/s]Joint total (2024 wk9):  45%|████▌     | 45/100 [00:49<01:21,  1.49s/it]Joint total (2024 wk9):  46%|████▌     | 46/100 [00:50<01:00,  1.13s/it]Joint total (2024 wk9):  47%|████▋     | 47/100 [00:50<00:43,  1.21it/s]Joint total (2024 wk9):  48%|████▊     | 48/100 [00:50<00:32,  1.61it/s]Joint total (2024 wk9):  49%|████▉     | 49/100 [00:53<01:15,  1.48s/it]Joint total (2024 wk9):  50%|█████     | 50/100 [00:54<00:56,  1.14s/it]Joint total (2024 wk9):  52%|█████▏    | 52/100 [00:54<00:32,  1.50it/s]Joint total (2024 wk9):  53%|█████▎    | 53/100 [00:57<01:03,  1.36s/it]Joint total (2024 wk9):  54%|█████▍    | 54/100 [00:58<00:51,  1.12s/it]Joint total (2024 wk9):  56%|█████▌    | 56/100 [00:58<00:29,  1.49it/s]Joint total (2024 wk9):  57%|█████▋    | 57/100 [01:01<00:57,  1.34s/it]Joint total (2024 wk9):  58%|█████▊    | 58/100 [01:02<00:46,  1.11s/it]Joint total (2024 wk9):  60%|██████    | 60/100 [01:02<00:28,  1.42it/s]Joint total (2024 wk9):  61%|██████    | 61/100 [01:06<00:52,  1.34s/it]Joint total (2024 wk9):  62%|██████▏   | 62/100 [01:06<00:42,  1.11s/it]Joint total (2024 wk9):  64%|██████▍   | 64/100 [01:06<00:26,  1.37it/s]Joint total (2024 wk9):  65%|██████▌   | 65/100 [01:10<00:46,  1.33s/it]Joint total (2024 wk9):  66%|██████▌   | 66/100 [01:10<00:36,  1.09s/it]Joint total (2024 wk9):  68%|██████▊   | 68/100 [01:11<00:23,  1.37it/s]Joint total (2024 wk9):  69%|██████▉   | 69/100 [01:14<00:41,  1.34s/it]Joint total (2024 wk9):  70%|███████   | 70/100 [01:14<00:33,  1.11s/it]Joint total (2024 wk9):  72%|███████▏  | 72/100 [01:15<00:20,  1.34it/s]Joint total (2024 wk9):  73%|███████▎  | 73/100 [01:18<00:36,  1.33s/it]Joint total (2024 wk9):  74%|███████▍  | 74/100 [01:18<00:28,  1.09s/it]Joint total (2024 wk9):  75%|███████▌  | 75/100 [01:19<00:21,  1.19it/s]Joint total (2024 wk9):  76%|███████▌  | 76/100 [01:19<00:18,  1.33it/s]Joint total (2024 wk9):  77%|███████▋  | 77/100 [01:22<00:32,  1.42s/it]Joint total (2024 wk9):  78%|███████▊  | 78/100 [01:23<00:24,  1.11s/it]Joint total (2024 wk9):  79%|███████▉  | 79/100 [01:23<00:17,  1.18it/s]Joint total (2024 wk9):  80%|████████  | 80/100 [01:23<00:15,  1.29it/s]Joint total (2024 wk9):  80%|████████  | 80/100 [01:24<00:21,  1.05s/it]
+Traceback (most recent call last):
+  File "/home/jimbo/werk/NFL/shared_research.py", line 180, in <module>
+    compare(args)
+  File "/home/jimbo/werk/NFL/shared_research.py", line 86, in compare
+    target, details, _ = js.fit_panel(data, int(season), int(week), args.iterations,
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jimbo/werk/NFL/joint_scoring.py", line 202, in fit_panel
+    runs = list(tqdm(pool(delayed(fit_member)(i, x, y, xp, seed, epochs, market)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jimbo/miniforge/envs/skins/lib/python3.11/site-packages/tqdm/std.py", line 1181, in __iter__
+    for obj in iterable:
+  File "/home/jimbo/miniforge/envs/skins/lib/python3.11/site-packages/joblib/parallel.py", line 1682, in _get_outputs
+    yield from self._retrieve()
+  File "/home/jimbo/miniforge/envs/skins/lib/python3.11/site-packages/joblib/parallel.py", line 1800, in _retrieve
+    time.sleep(0.01)
+KeyboardInterrupt

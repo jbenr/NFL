@@ -3,12 +3,16 @@ import os
 import nfl_data_py as nfl
 import requests
 import json
+from io import StringIO
 from bs4 import BeautifulSoup
 from tabulate import tabulate
 
 def pull_sched(szns):
     if not os.path.exists('data'): os.makedirs('data')
     sched = nfl.import_schedules(szns)
+    if os.path.exists('data/sched.parquet'):
+        previous = pd.read_parquet('data/sched.parquet')
+        sched = pd.concat([previous[~previous.season.isin(sched.season.unique())], sched], ignore_index=True)
     sched.to_parquet('data/sched.parquet')
 
 
@@ -55,7 +59,7 @@ def get_abbr():
     response = requests.get(wikiurl, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
     indiatable = soup.find('table',{'class':"wikitable"})
-    df = pd.read_html(str(indiatable))
+    df = pd.read_html(StringIO(str(indiatable)))
     df = pd.DataFrame(df[0])
     df.columns = df.iloc[0]
     df = df.drop(df.index[0]).reset_index(drop=True).rename(columns={'Franchise':'team_name','Commonly Used Abbreviations':'abbr'})[['team_name','abbr']]

@@ -8,8 +8,16 @@ from datetime import datetime
 
 from tqdm import tqdm
 import concurrent.futures
+import multiprocessing
 import os
 import re
+from pathlib import Path
+
+RATE_MODE = 'legacy'
+
+# sched.parquet: historical abbreviation. pbp_*.parquet: current abbreviation,
+# backfilled across every season. See prep_test_train() for where this matters.
+RELOCATED_TEAMS = {'SD': 'LAC', 'STL': 'LA', 'OAK': 'LV'}
 
 
 def slicer1(df, play_type, group, stat, agg):
@@ -85,7 +93,15 @@ def gradual_acceleration_with_floor(days_from_max, total_season_days=130, steepn
 
 def slicer(df, play_type, group, stat, agg,
            total_season_days=160, steepness=3, floor_weight=0.05):
-    df1 = df.copy()
+    # Only copy the columns this call actually reads. pbp frames are ~400 cols
+    # (half of them object dtype), so copying the whole thing 66x per calc_stats
+    # was the dominant cost. Math below is untouched.
+    group_cols = group if isinstance(group, list) else [group]
+    need = set(group_cols)
+    if stat in df.columns: need.add(stat)
+    if play_type is not None and 'play_type' in df.columns: need.add('play_type')
+    if 'game_date' in df.columns: need.add('game_date')
+    df1 = df[[c for c in df.columns if c in need]].copy()
 
     # Filter by play_type
     if isinstance(play_type, list):
@@ -95,8 +111,8 @@ def slicer(df, play_type, group, stat, agg,
 
     # Calculate days from max_date and apply weights
     if 'game_date' in df1.columns:
-        max_date = pd.to_datetime(df1['game_date']).max()
-        df1['days_from_max'] = (max_date - pd.to_datetime(df1['game_date'])).dt.days
+        dates = pd.to_datetime(df1['game_date'], cache=False)
+        df1['days_from_max'] = (dates.max() - dates).dt.days
 
         # Compute weights using gradual acceleration decay with a floor
         df1['weight'] = gradual_acceleration_with_floor(
@@ -113,7 +129,8 @@ def slicer(df, play_type, group, stat, agg,
     keys = [df1[c] for c in group_cols]  # array-like keys to group the Series
 
     if agg == 'count':
-        df1 = df1.groupby(group_cols).size().rename(stat)
+        df1 = (df1['weight'].groupby(keys).sum() if RATE_MODE == 'weighted'
+               else df1.groupby(group_cols).size()).rename(stat)
 
     elif agg == 'sum':
         wx = df1[stat] * df1['weight']  # Σ(x * w)
@@ -134,6 +151,9 @@ def calc_stats(df):
         'mean',numeric_only=True)[['yards_gained']]                                         # Off run yards per play
     guy.columns = ['off_run_ypp']
     guy.index.name = 'team'
+
+    if RATE_MODE == 'weighted':
+        guy['off_run_ypp'] = slicer(df, 'run', 'posteam', 'yards_gained', 'mean')
 
     guy['def_run_ypp'] = slicer(df, 'run', 'defteam', 'yards_gained', 'mean')               # Def run yards per play
 
@@ -312,20 +332,25 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
                      11.3 * guy.pass_touchdown - 14.1 * guy.interception - 8 * guy.sack -
                      1.1 * guy.rush_attempt + 0.6 * guy.rushing_yards + 15.9 * guy.rush_touchdown)
 
-    sched = pd.merge(sched, guy[['season', 'week', 'name', 'qb_elo']], how='left',
-                     left_on=['season', 'week', 'away_qb_short'], right_on=['season', 'week', 'name']
-                     ).rename(columns={'qb_elo': 'away_qb_elo'}).drop(columns='name')
-    sched = pd.merge(sched, guy[['season', 'week', 'name', 'qb_elo']], how='left',
-                     left_on=['season', 'week', 'home_qb_short'], right_on=['season', 'week', 'name']
-                     ).rename(columns={'qb_elo': 'home_qb_elo'}).drop(columns='name')
-
-    away = sched[['season', 'week', 'away_team', 'home_qb_elo', 'game_date']].rename(
-        columns={'away_team': 'team', 'home_qb_elo': 'def_qb_elo'}
+    # All passing production plus QB rushing, including relief quarterbacks.
+    # Identify rushers from passers in this window and scheduled QBs; do not
+    # include ordinary RB rushing. Sum within games before recency averaging.
+    qbs = set(df_['passer'].dropna()) | set(sched.away_qb_short) | set(sched.home_qb_short)
+    qb_play = (df_['passer'].notna() | df_['rusher'].isin(qbs) | df_.qb_scramble.eq(1)
+               | df_.complete_pass.eq(1) | df_.incomplete_pass.eq(1) | df_.sack.eq(1)
+               | df_.interception.eq(1))
+    if 'qb_kneel' in df_:
+        qb_play |= df_.qb_kneel.eq(1)
+    plays = df_.loc[qb_play].copy()
+    plays['def_qb_elo'] = (
+        -2.2 * (plays.incomplete_pass.fillna(0) + plays.complete_pass.fillna(0))
+        + 3.7 * plays.complete_pass.fillna(0) + plays.passing_yards.fillna(0) / 5
+        + 11.3 * plays.pass_touchdown.fillna(0) - 14.1 * plays.interception.fillna(0)
+        - 8 * plays.sack.fillna(0) - 1.1 * plays.rush_attempt.fillna(0)
+        + 0.6 * plays.rushing_yards.fillna(0) + 15.9 * plays.rush_touchdown.fillna(0)
     )
-    home = sched[['season', 'week', 'home_team', 'away_qb_elo', 'game_date']].rename(
-        columns={'home_team': 'team', 'away_qb_elo': 'def_qb_elo'}
-    )
-    defense = pd.concat([away, home]).sort_values(by=['season', 'week', 'team'])
+    defense = plays.groupby(['season', 'week', 'game_date', 'defteam'])['def_qb_elo'].sum().reset_index()
+    defense = defense.rename(columns={'defteam': 'team'})
 
     max_date = pd.to_datetime(defense['game_date']).max()
     defense['days_from_max'] = (max_date - pd.to_datetime(defense['game_date'])).dt.days
@@ -337,12 +362,10 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
     )
     # print(tabulate(defense,headers='keys',tablefmt=tabulate_formats[4]))
 
-    def_mean = (defense['def_qb_elo'] * defense['weight']).sum() / defense['weight'].sum()
     wx = (defense['def_qb_elo'] * defense['weight'])
     num = wx.groupby(defense['team']).sum()
     den = defense['weight'].groupby(defense['team']).sum()
     defense = (num / den)
-    defense -= def_mean
     defense = defense.reset_index(name='def_qb_elo')
 
     max_date = pd.to_datetime(guy['game_date']).max()
@@ -425,18 +448,143 @@ def comp_stats(stats, sched):
     df = pd.concat(df_)
     sched = pd.merge(sched, df, how='left', on=['away_team','home_team'])
 
+    # Preserve absolute team rates for totals and readable weekly summaries.
+    for side in ['away', 'home']:
+        raw = stats.add_prefix(f'{side}_raw_')
+        sched = sched.merge(raw, left_on=f'{side}_team', right_index=True, how='left')
+    for metric in [c[4:] for c in stats if c.startswith('off_') and 'def_' + c[4:] in stats]:
+        cols = [f'{side}_raw_{unit}_{metric}' for side in ['away', 'home'] for unit in ['off', 'def']]
+        sched[f'total_{metric}'] = sched[cols].mean(axis=1, skipna=False)
+
     return sched
 
 
-def prep_test_train(szn, week, lookback):
+# --------------------------------------------------------------------------
+# Per-week worker. Lives at module level (not a closure) so ProcessPoolExecutor
+# can reference it. Heavy state is built once per worker process by
+# _init_worker and read from the _WORK global -- it is never pickled per task.
+# --------------------------------------------------------------------------
+_WORK = None
+
+
+def _build_work(seasons, sched, df, lookback, calculation='legacy'):
+    global RATE_MODE
+    RATE_MODE = calculation
+    # Raw plays are loaded lazily, only after a weekly feature-cache miss.
+    return {
+        'index': {},
+        'seasons': set(seasons),
+        'sched': sched,
+        'df': df,
+        'lookback': lookback,
+        'cache_sources': [__file__, 'utils.py', 'data/sched.parquet'] + [f'data/pbp/pbp_{s}.parquet' for s in seasons],
+        'calculation': calculation,
+    }
+
+
+def _init_worker(seasons, sched, df, lookback, calculation='legacy'):
+    global _WORK
+    _WORK = _build_work(seasons, sched, df, lookback, calculation)
+
+
+def _load_window(weeks):
+    """Keep only this rolling window; read missing weeks with parquet filters."""
+    index = _WORK['index']
+    wanted = set(weeks)
+    for key in list(index):
+        if key not in wanted:
+            del index[key]
+    for season in sorted({s for s, w in wanted if (s, w) not in index}):
+        if season not in _WORK['seasons']:
+            continue
+        missing = sorted(w for s, w in wanted if s == season and (s, w) not in index)
+        plays = pd.read_parquet(f'data/pbp/pbp_{season}.parquet',
+                                filters=[('week', 'in', missing)])
+        for week, frame in plays.groupby('week', sort=False):
+            index[season, int(week)] = frame.copy()
+    frames = [index[key] for key in weeks if key in index]
+    if not frames:
+        raise ValueError(f'No play-by-play available for window {weeks}')
+    return pd.concat(frames)
+
+
+def _calc_week(sw):
+    s, w = sw
+    cached = utils.cache_path('weekly_features', [int(s), int(w), _WORK['lookback'], _WORK['calculation']], _WORK['cache_sources'])
+    if cached.exists():
+        return pd.read_parquet(cached)
+    sched = _WORK['sched']
+    df = _WORK['df']
+    lookback = _WORK['lookback']
+
+    pbp_ = []
+    s_, w_, lb_ = s, w - 1, lookback
+
+    while lb_ > 0:
+        if w_ <= 0:
+            s_ -= 1
+            w_ = int(sched.loc[sched.season == s_, 'week'].max())
+        pbp_.append((int(s_), int(w_)))
+        if sched.query(f'season=={s_} & week=={w_}')['game_type'].eq('REG').any():
+            lb_ -= 1
+        w_ -= 1
+
+    pbp_ = _load_window(pbp_)
+    calc = calc_stats(pbp_)
+
+    # qbr_ was an identical second concat of the same chunks; neither calc_stats
+    # nor calc_qb_elo mutates its input, so reuse the one frame
+    qb, dee = calc_qb_elo(pbp_, sched)
+
+    sched_ = df.query(f'season=={s} & week=={w}').copy()
+    for side in ['away', 'home']:
+        sched_[f'{side}_qb_short'] = sched_[f'{side}_qb_name'].apply(
+            lambda x: f'{x.split()[0][0]}.{x.split()[1]}' if isinstance(x, str) and len(x.split()) > 1 else '')
+
+    qb_team_map = pd.concat([
+        sched_[['away_qb_short', 'away_team']].rename(columns={'away_qb_short': 'qb', 'away_team': 'team'}),
+        sched_[['home_qb_short', 'home_team']].rename(columns={'home_qb_short': 'qb', 'home_team': 'team'})
+    ])
+
+    qb['name'] = qb['name'].apply(utils.strip_suffix)
+
+    qb = pd.merge(qb, qb_team_map, left_on='name', right_on='qb', how='left').drop(columns='qb').sort_values(by='team').reset_index(drop=True)
+    utils.make_dir('data/qb')
+    qb.to_parquet(f'data/qb/qb_{s}_{w}_{lookback}.parquet')
+
+    calc = pd.merge(calc, qb, on='team', how='left').rename(columns={'weighted_qb_elo':'off_qb_elo'}).drop(columns='name')
+    calc = pd.merge(calc, dee, on='team', how='left').set_index('team')
+
+    comp = comp_stats(calc, sched_)
+    utils.save_parquet(comp, cached)
+    return comp
+
+
+def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='legacy'):
+    global _WORK
+    if calculation not in ['legacy', 'weighted']:
+        raise ValueError('calculation must be legacy or weighted')
+    sources = [__file__, 'utils.py', 'data/sched.parquet'] + list(Path('data/pbp').glob('pbp_*.parquet'))
+    cached = utils.cache_path('features', [szn, week, lookback, history_weeks, calculation], sources)
+    if cached.exists():
+        print(f'  features  cached ({szn} wk{week}, lookback {lookback}, {calculation})')
+        return pd.read_parquet(cached)
     sched = pd.read_parquet('data/sched.parquet')
     sched = sched[['season','week','game_type','away_team','away_score','home_team','home_score','away_rest','home_rest',
                    'roof','surface','temp','wind','away_qb_name','home_qb_name','away_coach','home_coach',
                    'referee','location']]
+    # sched.parquet keeps the abbreviation a team used AT THE TIME (SD/STL/OAK for
+    # pre-relocation seasons), but pbp_*.parquet has already been backfilled to each
+    # team's CURRENT abbreviation for every season, including old ones. A large
+    # enough lookback reaches pre-2020 games and comp_stats()/calc_qb_elo() look a
+    # team up by name across both sources -- mismatched names means the lookup
+    # finds nothing and crashes. Same fix data_pullson.py already applies to NGS
+    # data (`df.replace({'LAR':'LA'})`), just for the three relocations pbp affects.
+    sched = sched.replace({'away_team': RELOCATED_TEAMS, 'home_team': RELOCATED_TEAMS})
     sched = sched.loc[~((sched['season'] == szn) & (sched['week'] > week))].copy()
 
     df = []
-    szn_, week_, lookback_ = szn, week, lookback
+    szn_, week_, lookback_ = szn, week, history_weeks if history_weeks is not None else lookback
     while lookback_ >= 0:
         temp = sched.query(f'season=={szn_} & week=={week_}')
         df.append(temp)
@@ -446,7 +594,8 @@ def prep_test_train(szn, week, lookback):
 
     df = pd.concat(df)
     df_ = []
-    szn_, week_, lookback_ = df.season.min(), df.week.min(), lookback
+    first = df.sort_values(['season', 'week']).iloc[0]
+    szn_, week_, lookback_ = int(first.season), int(first.week), lookback
     while lookback_ >= 0:
         temp = sched.query(f'season=={szn_} & week=={week_}')
         df_.append(temp)
@@ -456,77 +605,62 @@ def prep_test_train(szn, week, lookback):
 
     df_ = pd.concat([df]+df_)
 
-    pbp = []
-    for szn in df_.season.unique().tolist():
-        try:
-            df_pbp = pd.read_parquet(f'data/pbp/pbp_{szn}.parquet')
-            pbp.append(df_pbp)
-        except FileNotFoundError:
-            print(f"⚠️ File not found for season {szn}. Skipping.")
-            continue
-    pbp = pd.concat(pbp)
+    # Season list is resolved here so the "missing file" warning prints once in
+    # the parent rather than once per worker process.
+    seasons = []
+    for szn_ in df_.season.unique().tolist():
+        if os.path.exists(f'data/pbp/pbp_{szn_}.parquet'):
+            seasons.append(szn_)
+        else:
+            print(f"⚠️ File not found for season {szn_}. Skipping.")
 
     # ngs = pd.read_parquet(f'data/ngs_passing.parquet')
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
-    print(tings)
 
-    def calculate_stats(args):
-        s, w, lookback, pbp, sched, df = args
-        # print(f'Calculating stats for szn:{s} week:{w}')
-
-        pbp_, qbr_ = [], []
-        s_, w_, lb_ = s, w - 1, lookback
-
-        while lb_ > 0:
-            temp = pbp.query(f'season=={s_} & week=={w_}')
-            pbp_.append(temp)
-            qbr_.append(temp)
-
-            w_ -= 1
-            if w_ <= 0: s_ -= 1; w_ = sched[sched.season == s_].week.max()
-            if sched.query(f'season=={s_} & week=={w_}')['game_type'].unique()[0] == 'REG': lb_ -= 1
-
-        pbp_ = pd.concat(pbp_)
-        calc = calc_stats(pbp_)
-
-        qbr_ = pd.concat(qbr_)
-        qb, dee = calc_qb_elo(qbr_, sched)
-
-        sched_ = df.query(f'season=={s} & week=={w}').copy()
-        sched_.loc[:, 'away_qb_short'] = sched_['away_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
-        sched_.loc[:, 'home_qb_short'] = sched_['home_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
-
-        qb_team_map = pd.concat([
-            sched_[['away_qb_short', 'away_team']].rename(columns={'away_qb_short': 'qb', 'away_team': 'team'}),
-            sched_[['home_qb_short', 'home_team']].rename(columns={'home_qb_short': 'qb', 'home_team': 'team'})
-        ])
-
-        qb['name'] = qb['name'].apply(utils.strip_suffix)
-
-        qb = pd.merge(qb, qb_team_map, left_on='name', right_on='qb', how='left').drop(columns='qb').sort_values(by='team').reset_index(drop=True)
-        utils.make_dir('data/qb')
-        qb.to_parquet(f'data/qb/qb_{s}_{w}_{lookback}.parquet')
-
-        calc = pd.merge(calc, qb, on='team', how='left').rename(columns={'weighted_qb_elo':'off_qb_elo'}).drop(columns='name')
-        calc = pd.merge(calc, dee, on='team', how='left').set_index('team')
-
-        comp = comp_stats(calc, sched_)
-        return comp
-
-    tings = df.groupby(['season', 'week']).agg('count').index.tolist()
     num_cores = os.cpu_count()
-    num_workers = max(1, num_cores // 4)
-    # num_workers = 1
-    print(f'Num workers: {num_workers} from {num_cores} cores!')
-    args_list = [(s, w, lookback, pbp, sched, df) for s, w in tings]
+    # NFL_WORKERS overrides. Worker count affects only scheduling, never results:
+    # executor.map yields in input order regardless of completion order.
+    # //4 measured fastest on 32 cores (8 procs); more workers costs more in
+    # per-worker startup than it saves on only ~28 tasks.
+    num_workers = int(os.environ.get("NFL_WORKERS") or 0) or max(1, num_cores // 4)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-        results = list(
-            tqdm(executor.map(calculate_stats, args_list), total=len(args_list), desc="Crunching the numbers"))
+    _span = (f"{tings[0][0]} wk{tings[0][1]} → {tings[-1][0]} wk{tings[-1][1]}"
+             if tings else "no weeks")
+    _szns = f"{min(seasons)}-{max(seasons)}" if seasons else "none"
+    _games = len(df)
+    print(f"  target    {szn} wk{week}   (lookback {lookback})")
+    print(f"  data      {len(tings)} weeks, {_games} games   {_span}")
+    print(f"  pbp       seasons {_szns}")
+    print(f"  workers   {num_workers} of {num_cores} cores"
+          f"{'  (serial)' if num_workers == 1 else ''}")
+
+    utils.make_dir("data/qb")  # create once here, not concurrently in workers
+
+    if num_workers == 1:
+        # serial path -- same code, easy to debug and profile
+        _init_worker(seasons, sched, df, lookback, calculation)
+        results = [_calc_week(sw) for sw in tqdm(tings, desc="Crunching the numbers")]
+        _WORK = None  # Release raw plays before neural-net workers start.
+    else:
+        # Genuine parallelism: separate processes, so no GIL. "forkserver" forks
+        # from a clean interpreter, which avoids the fork-with-TensorFlow-threads
+        # deadlock hazard (main.py imports TF before it ever calls this).
+        # Each worker rebuilds its pbp index once via the initializer, so the big
+        # frames are never pickled -- only (season, week) goes out per task and a
+        # ~30-row result comes back.
+        ctx = multiprocessing.get_context("forkserver")
+        with concurrent.futures.ProcessPoolExecutor(
+                max_workers=num_workers,
+                mp_context=ctx,
+                initializer=_init_worker,
+                initargs=(seasons, sched, df, lookback, calculation)) as executor:
+            results = list(tqdm(executor.map(_calc_week, tings),
+                                total=len(tings), desc="Crunching the numbers"))
 
     data = pd.concat(results).reset_index(drop=True)
-    print(tabulate(data.tail(3),headers='keys',tablefmt=tabulate_formats[4]))
+    utils.save_parquet(data, cached)
+    print(f'  prepared  {len(data)} games, {len(data.columns)} columns (cached)')
     return data
 
 
@@ -576,9 +710,9 @@ def _records_pregame(df):
 
     long = long.sort_values(["season","team","week"])
     grp = long.groupby(["season","team"], sort=False)
-    long["W_pg"] = grp["win"].cumsum().shift(fill_value=0)
-    long["T_pg"] = grp["tie"].cumsum().shift(fill_value=0)
-    long["G_pg"] = grp["played"].cumsum().shift(fill_value=0)
+    long["W_pg"] = grp["win"].cumsum() - long['win']
+    long["T_pg"] = grp["tie"].cumsum() - long['tie']
+    long["G_pg"] = grp["played"].cumsum() - long['played']
     long["L_pg"] = (long["G_pg"] - long["W_pg"] - long["T_pg"]).clip(lower=0)
 
     rec = long[["season","week","team","W_pg","L_pg","T_pg"]].copy()
@@ -593,7 +727,7 @@ def _conf_div(df):
     c_away, d_away = zip(*df["away_team"].map(safe))
     df["conf_home"], df["div_home"] = c_home, d_home
     df["conf_away"], df["div_away"] = c_away, d_away
-    df["is_div"] = (df["div_home"] == df["div_away"]).astype(int)
+    df["is_div"] = ((df["div_home"] == df["div_away"]) & (df['conf_home'] == df['conf_away'])).astype(int)
     df["same_conf"] = (df["conf_home"] == df["conf_away"]).astype(int)
     return df
 
@@ -692,35 +826,31 @@ def matchup_importance(sched: pd.DataFrame) -> pd.DataFrame:
         df["late_w"] = (df["week"] / df["reg_last_week"].replace(0, np.nan)).clip(0,1).fillna(0)
 
     # Head-to-head proxy (this season)
-    h2h = _build_h2h_proxy(df)
+    h2h = {}
+    snapshots = {}
+    for (season, week), games in df.groupby(['season', 'week']):
+        season_games = df[(df.season == season) & (df.game_type == 'REG')]
+        past = season_games[season_games.week < week]
+        h2h[(season, week)] = _build_h2h_proxy(past)
+        records = []
+        for team in pd.unique(season_games[['away_team', 'home_team']].values.ravel()):
+            home = past[past.home_team == team].dropna(subset=['away_score', 'home_score'])
+            away = past[past.away_team == team].dropna(subset=['away_score', 'home_score'])
+            wins = home.home_score.gt(home.away_score).sum() + away.away_score.gt(away.home_score).sum()
+            ties = home.home_score.eq(home.away_score).sum() + away.away_score.eq(away.home_score).sum()
+            left = ((season_games.week >= week) & ((season_games.home_team == team) | (season_games.away_team == team))).sum()
+            records.append(dict(team=team, wins=wins, ties=ties, left=left))
+        snapshots[(season, week)] = pd.DataFrame(records)
+        for side in ['home', 'away']:
+            df.loc[games.index, f'{side}_games_left'] = games[f'{side}_team'].map(snapshots[(season, week)].set_index('team')['left']).fillna(0)
 
     def side_block(g: pd.DataFrame, side: str) -> pd.DataFrame:
         # Conference name for this side
         conf_name = g[f"conf_{side}"].iloc[0]
 
-        # All rows in this (season, week) that belong to this conference on either side
-        all_rows = df[
-            (df["season"] == g["season"].iloc[0]) &
-            (df["week"]   == g["week"].iloc[0]) &
-            ((df["conf_home"] == conf_name) | (df["conf_away"] == conf_name))
-        ]
-
-        # Snapshot per team in conference: current wins and remaining games
-        hh = all_rows[["home_team","home_wins","home_ties","home_games_left"]].rename(
-            columns={"home_team":"team","home_wins":"wins","home_ties":"ties","home_games_left":"left"})
-        aa = all_rows[["away_team","away_wins","away_ties","away_games_left"]].rename(
-            columns={"away_team":"team","away_wins":"wins","away_ties":"ties","away_games_left":"left"})
-        snap = pd.concat([hh,aa], ignore_index=True).groupby("team", as_index=False).max(numeric_only=True)
-
-        # Ensure full conference membership (16 teams historically; tolerate variations)
-        conf_teams = [t for t,(c,_) in TEAM_META.items() if c == conf_name]
-        if len(snap) < len(conf_teams):
-            miss = sorted(set(conf_teams) - set(snap["team"]))
-            if miss:
-                # choose modal remaining among present
-                gr_mode = int(pd.Series(snap["left"]).mode(dropna=True).iloc[0]) if len(snap)>0 else 0
-                snap = pd.concat([snap, pd.DataFrame({"team":miss,"wins":0,"ties":0,"left":gr_mode})], ignore_index=True)
-
+        # Include teams on bye using only results before this week.
+        snap = snapshots[(g.season.iloc[0], g.week.iloc[0])].copy()
+        snap = snap[snap.team.map(lambda t: TEAM_META.get(t, ('UNK', 'UNK'))[0]) == conf_name]
         # Compute others' max_final = wins + left (ties ignored for simplicity)
         snap["max_final"] = snap["wins"].astype(int) + snap["left"].astype(int)
 
@@ -738,13 +868,13 @@ def matchup_importance(sched: pd.DataFrame) -> pd.DataFrame:
             # Others' max_final excluding me
             arr_others = snap.set_index("team")["max_final"].drop(index=me, errors="ignore").values
 
-            base_cut = _nth_largest(arr_others, 7)  # 7th largest among others
+            base_cut = _nth_largest(arr_others, 7 if row['season'] >= 2020 else 6)
 
             # Tiebreak proxy:
             #   - Pessimistic: assume ties break against you (+0.5)
             #   - Optimistic:  assume ties break for you (-0.5)
             #   - H2H edge: small nudge (-0.25 if you have edge; +0.25 if you are behind)
-            h2h_edge = h2h.get((int(row["season"]), str(me), str(opp)), 0)
+            h2h_edge = h2h[(row['season'], row['week'])].get((int(row['season']), str(me), str(opp)), 0)
             cut_pess = base_cut + 0.5 + ( -0.25 * h2h_edge )  # if edge=+1, reduce pess cut a bit
             cut_opt  = base_cut - 0.5 + ( -0.25 * h2h_edge )
 
@@ -804,7 +934,7 @@ def matchup_importance(sched: pd.DataFrame) -> pd.DataFrame:
     side_frames = []
     for side in ("home","away"):
         key = ["season","week",f"conf_{side}"]
-        side_out = df.groupby(key, group_keys=False).apply(lambda g: side_block(g, side))
+        side_out = pd.concat([side_block(g, side) for _, g in df.groupby(key)])
         side_frames.append(side_out)
 
     extra = pd.concat(side_frames, axis=1)
@@ -901,18 +1031,39 @@ def matchup_importance(sched: pd.DataFrame) -> pd.DataFrame:
 
 def additional_features(df_):
     df = df_.copy()
-    # imp = matchup_importance(df)
-    # df = df.merge(
-    #     imp[[
-    #         "game_id","home_record","away_record",
-    #         "home_importance","away_importance","importance_diff"
-    #     ]],
-    #     on="game_id", how="left"
-    # )
+
+    # matchup_importance() needs the full, untruncated schedule -- it computes
+    # season-structure facts (games remaining, clinch/elimination status) that
+    # depend on knowing the whole season, not just weeks up to the target.
+    # prep_test_train's own sched slice is truncated and missing game_id, so this
+    # loads its own copy rather than reusing df_'s. Merged on the natural
+    # (season, week, away_team, home_team) key -- not game_id, which prep_test_train
+    # never carries -- matching how every other join in this codebase keys games.
+    try:
+        cached = utils.cache_path('importance', sorted(df.season.unique().tolist()), [__file__, 'data/sched.parquet'])
+        if cached.exists():
+            imp = pd.read_parquet(cached)
+        else:
+            full_sched = pd.read_parquet('data/sched.parquet').replace({'away_team': RELOCATED_TEAMS, 'home_team': RELOCATED_TEAMS})
+            imp = matchup_importance(full_sched[full_sched.season.isin(df.season.unique())])
+            utils.save_parquet(imp, cached)
+        df = df.drop(columns=['home_importance', 'away_importance', 'importance_diff'], errors='ignore')
+        df = df.merge(
+            imp[["season", "week", "away_team", "home_team",
+                "home_importance", "away_importance", "importance_diff"]],
+            on=["season", "week", "away_team", "home_team"], how="left", validate="one_to_one",
+        )
+    except Exception as e:
+        print(f"[additional_features] matchup_importance unavailable, skipping: {e}")
+        df["home_importance"] = np.nan
+        df["away_importance"] = np.nan
+        df["importance_diff"] = np.nan
 
     df["away_rest_adv"] = df["away_rest"] - df["home_rest"]
     df["home_field_adv"] = (df["location"] == "Home").astype(int) if "location" in df.columns else 0
-    # df["away_game_importance"] = df["away_importance"] - df["home_importance"]
+    df["away_game_importance"] = df["away_importance"] - df["home_importance"]
+    df['total_game_importance'] = df[['away_importance', 'home_importance']].mean(axis=1)
+    df['total_rest'] = df[['away_rest', 'home_rest']].mean(axis=1)
     return df
 
 

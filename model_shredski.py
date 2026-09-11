@@ -1,3 +1,14 @@
+# These MUST be set before tensorflow is imported -- TF reads them once, at
+# import time. They used to sit below the import, which is why the CUDA /
+# oneDNN / TF-TRT banners kept printing.
+#   0 = all, 1 = no INFO, 2 = no INFO+WARNING, 3 = no INFO+WARNING+ERROR
+# 3 is needed because the "Unable to register cuFFT/cuDNN/cuBLAS factory"
+# lines are logged at ERROR level. They are harmless duplicate-registration
+# notices, not real failures. Drop to "2" if you ever need to see TF errors.
+import os
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,17 +20,67 @@ import json
 
 import sklearn
 from sklearn.model_selection import train_test_split
+from joblib import Parallel, delayed, cpu_count, parallel_config
+from modelo_workers import initialize_worker, train_iteration
 
 from tensorflow import keras
 from tensorflow.keras import Sequential
 from tensorflow.keras.layers import Input, Dense, Dropout
 from tensorflow.keras import initializers
 import tensorflow as tf
+tf.get_logger().setLevel('ERROR')                  # silence python-side tf logging
 tf.keras.mixed_precision.set_global_policy('float32')
 
-import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"           # hide INFO/WARN
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"          # silence oneDNN banner
+import sys
+import contextlib
+from tqdm import tqdm
+
+
+@contextlib.contextmanager
+def _quiet_stderr():
+    """Silence stderr at the file-descriptor level.
+
+    The CUDA/XLA chatter ("could not open file to read NUMA node", "XLA service
+    initialized", "Compiled cluster using XLA!") comes from C++ absl logging
+    that writes to stderr *before* absl::InitializeLog() runs. No env var or
+    python logger setting can filter it -- only an fd-level redirect.
+    """
+    fd = sys.stderr.fileno()
+    saved = os.dup(fd)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        sys.stderr.flush()
+        os.dup2(devnull, fd)
+        yield
+    finally:
+        sys.stderr.flush()
+        os.dup2(saved, fd)
+        os.close(devnull)
+        os.close(saved)
+
+
+_TF_WARMED = False
+
+
+def _warm_up_tf():
+    """Trigger TF's one-time GPU/XLA init with stderr muted, so the banners are
+    swallowed once here instead of appearing mid-run. Everything after this runs
+    with stderr fully live, so real errors are never hidden."""
+    global _TF_WARMED
+    if _TF_WARMED:
+        return
+    _TF_WARMED = True
+    try:
+        with _quiet_stderr():
+            w = Sequential([Input(shape=(1,)), Dense(1)])
+            w.compile(optimizer='adam', loss='mse')
+            z = np.zeros((2, 1), dtype='float32')
+            w.fit(z, np.zeros(2, dtype='float32'), epochs=1, verbose=0)
+            w.predict(z, verbose=0)
+            del w
+            tf.keras.backend.clear_session()
+    except Exception:
+        pass  # warm-up is cosmetic only; never let it break a run
 
 
 def _pretty_feat(name: str) -> str:
@@ -308,7 +369,7 @@ def integrated_gradients(model, x_batch: tf.Tensor, baseline: tf.Tensor, m_steps
 
     # Reshape grads back to (m+1, n, d) and average across the path
     grads = tf.reshape(grads_flat, (m_steps + 1, n, d))
-    avg_grads = tf.reduce_mean(grads, axis=0)             # (n, d)
+    avg_grads = tf.reduce_mean((grads[:-1] + grads[1:]) / 2, axis=0)
 
     attributions = (x - baseline_t) * avg_grads           # (n, d)
 
@@ -319,12 +380,107 @@ def integrated_gradients(model, x_batch: tf.Tensor, baseline: tf.Tensor, m_steps
 
 # -------- model --------
 
-def modelo(data, season, week, tag, bt: bool = False):
+def sign_penalty(y_true, y_pred):
+    loss = tf.where(tf.less(y_true * y_pred, 0),
+                    1.3 * tf.square(y_true - y_pred),
+                    tf.square(y_true - y_pred))
+    return tf.reduce_mean(loss, axis=-1)
+
+
+def create_model(n_features: int):
+    return Sequential([
+        Input(shape=(n_features,)),
+        Dropout(0.10),
+        Dense(n_features, activation="elu", kernel_initializer=initializers.HeNormal()),
+        Dense((n_features + 1) // 2, activation="elu", kernel_initializer=initializers.HeNormal()),
+        Dense(max(1, (n_features + 1) // 3), activation="elu", kernel_initializer=initializers.HeNormal()),
+        Dense(1, activation="linear"),
+    ])
+
+
+def permutation_importance(model, X_val, y_val, loss_fn=sign_penalty, random_state=42):
+    """Evaluate all feature shuffles together, preserving the old RNG order."""
+    values = np.asarray(X_val, dtype=np.float32)
+    rng = np.random.default_rng(random_state)
+    batches = [values]
+    for j in range(values.shape[1]):
+        shuffled = values.copy()
+        rng.shuffle(shuffled[:, j])
+        batches.append(shuffled)
+    predictions = np.asarray(model(np.concatenate(batches), training=False)).reshape(
+        len(batches), len(values))
+    target = tf.constant(np.asarray(y_val), dtype=tf.float32)
+    losses = [float(loss_fn(target, tf.constant(p))) for p in predictions]
+    return np.asarray(losses[1:]) - losses[0]
+
+
+def squared_error(y_true, y_pred):
+    return tf.reduce_mean(tf.square(y_true - y_pred), axis=-1)
+
+
+def _train_iteration(i, X, Y, X_pred, X_val, y_val, baseline, bt, epochs, device, random_state, market='spread'):
+    """One independent model; return only small arrays, never TensorFlow state."""
+    with tf.device('/CPU:0' if device == 'cpu' else '/GPU:0'):
+        tf.keras.backend.clear_session()
+        if random_state is not None:
+            keras.utils.set_random_seed(random_state + i)
+        model = create_model(X.shape[1])
+        try:
+            loss_fn = sign_penalty if market == 'spread' else squared_error
+            model.compile(optimizer=keras.optimizers.Adam(amsgrad=True), loss=loss_fn)
+            reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5)
+            model.fit(X, Y, epochs=epochs, callbacks=[reduce_lr], verbose=0)
+            test_preds = np.asarray(model(X_pred, training=False)).reshape(-1)
+            if not np.isfinite(test_preds).all():
+                raise ValueError(f'Model iteration {i + 1} produced non-finite predictions')
+            imp = edges = metrics = base_pred = None
+            if not bt:
+                train_preds = np.asarray(model(X, training=False)).reshape(-1)
+                metrics = (
+                    sklearn.metrics.r2_score(Y, train_preds),
+                    sklearn.metrics.mean_absolute_error(Y, train_preds),
+                    sklearn.metrics.mean_squared_error(Y, train_preds),
+                )
+                edges, base_pred, _ = integrated_gradients(
+                    model, tf.constant(X_pred), tf.constant(baseline), m_steps=64)
+                imp = permutation_importance(model, X_val, y_val, loss_fn=loss_fn, random_state=42 + i)
+                if not np.isfinite(edges).all() or not np.isfinite(imp).all():
+                    raise ValueError(f'Model iteration {i + 1} produced non-finite explanations')
+            return test_preds, imp, edges, metrics, base_pred
+        finally:
+            del model
+            tf.keras.backend.clear_session()
+
+
+def modelo(data, season, week, tag, bt: bool = False, *, n_jobs=None,
+           iterations=100, epochs=100, device='cpu', random_state=None,
+           features=None, market='spread', round_predictions=True):
+    """Train the ensemble on up to 8 CPU workers by default.
+
+    Override worker count with n_jobs or NFL_MODEL_JOBS; n_jobs=1 runs locally.
+    device='gpu' runs sequentially. Ensemble size, epochs, architecture and loss
+    retain their existing defaults. random_state optionally seeds each model.
+    """
+    if iterations < 1 or epochs < 1:
+        raise ValueError('iterations and epochs must be positive')
+    if device not in ('cpu', 'gpu'):
+        raise ValueError("device must be 'cpu' or 'gpu'")
+    if market not in ('spread', 'total'):
+        raise ValueError("market must be 'spread' or 'total'")
+    if n_jobs is None:
+        n_jobs = 1 if device == 'gpu' else int(os.environ.get('NFL_MODEL_JOBS', min(8, cpu_count())))
+    if n_jobs < 1:
+        raise ValueError('n_jobs must be positive')
+    if device == 'gpu' and n_jobs != 1:
+        raise ValueError("device='gpu' requires n_jobs=1")
+    n_jobs = min(n_jobs, iterations)
+    tag = str(tag)
     dat = data.copy()
-    dat.loc[:, 'result'] = dat['away_score'] - dat['home_score']
+    dat.loc[:, 'result'] = (dat['away_score'] - dat['home_score'] if market == 'spread'
+                            else dat['away_score'] + dat['home_score'])
 
     target = 'result'
-    features = [
+    features = features or ([c for c in dat if c.startswith('total_') and c != 'total_line'] if market == 'total' else [
         "away_off_run_ypp","away_def_run_ypp",
         "away_off_pass_ypp","away_def_pass_ypp",
         "away_off_pass_completion_%","away_def_pass_completion_%",
@@ -341,108 +497,76 @@ def modelo(data, season, week, tag, bt: bool = False):
         "away_off_sack_%", "away_def_sack_%",
         "away_off_qb_hit_%", "away_def_qb_hit_%",
         "away_rest_adv", "home_field_adv"
-    ]
+    ])
 
     preds = dat[(dat.season == season) & (dat.week == week)].copy()
-    train = dat[~((dat.season == season) & (dat.week == week))].copy()
+    train = dat[(dat.season < season) | ((dat.season == season) & (dat.week < week))].copy()
     X, Y = train[features], train[target]
-
-    # custom loss
-    def sign_penalty(y_true, y_pred):
-        penalty = 1.3
-        loss = tf.where(tf.less(y_true * y_pred, 0),
-                        penalty * tf.square(y_true - y_pred),
-                        tf.square(y_true - y_pred))
-        return tf.reduce_mean(loss, axis=-1)
-    keras.losses.sign_penalty = sign_penalty
-
-    # model builder
-    def create_model(n_features: int):
-        m = Sequential([
-            Input(shape=(n_features,)),  # <-- explicit input
-            Dropout(0.10),
-            Dense(n_features, activation="elu", kernel_initializer=initializers.HeNormal()),  # good with ELU
-            Dense((n_features + 1) // 2, activation="elu", kernel_initializer=initializers.HeNormal()),
-            Dense((n_features + 1) // 3, activation="elu", kernel_initializer=initializers.HeNormal()),
-            Dense(1, activation="linear")
-        ])
-        return m
-
-    # permutation importance (only used when bt=False)
-    def permutation_importance(model, X_val, y_val, loss_fn, random_state=42):
-        rng = np.random.default_rng(random_state)
-        base_pred = model.predict(X_val, verbose=0).reshape(-1)
-        base_loss = float(tf.keras.backend.get_value(
-            loss_fn(tf.constant(y_val.values, dtype=tf.float32),
-                    tf.constant(base_pred, dtype=tf.float32))
-        ))
-        importances = {}
-        X_val_arr = X_val.to_numpy(copy=True)
-        for j, col in enumerate(X_val.columns):
-            X_perm = X_val_arr.copy()
-            rng.shuffle(X_perm[:, j])
-            y_perm = model.predict(X_perm, verbose=0).reshape(-1)
-            loss = float(tf.keras.backend.get_value(
-                loss_fn(tf.constant(y_val.values, dtype=tf.float32),
-                        tf.constant(y_perm, dtype=tf.float32))
-            ))
-            importances[col] = loss - base_loss
-        return pd.Series(importances)
-
-    # run
-    tf.keras.backend.clear_session()
-    X_tr, X_val, y_tr, y_val = train_test_split(X, Y, test_size=0.2, random_state=1337)
-    feat_means = X.mean()
+    if preds.empty:
+        raise ValueError(f'No prediction rows for {season} week {week}')
+    if len(train) < 2:
+        raise ValueError('At least two training rows are required')
+    if market == 'total':
+        # A rookie QB can have no prior Elo. Fit fill values on training only.
+        fill = X.replace([np.inf, -np.inf], np.nan).median().fillna(0)
+        X = X.replace([np.inf, -np.inf], np.nan).fillna(fill)
+        preds[features] = preds[features].replace([np.inf, -np.inf], np.nan).fillna(fill)
+    # Fail before starting workers: an unscored training game poisons all weights.
+    for name, values in [('training features', X), ('training targets', Y),
+                         ('prediction features', preds[features])]:
+        if not np.isfinite(np.asarray(values, dtype=np.float32)).all():
+            raise ValueError(f'Non-finite {name}; use data prepared for {season} week {week} '
+                             'with completed training games and finite features')
+    baseline = X.mean().to_numpy(dtype=np.float32)[None, :]
+    X = X.to_numpy(dtype=np.float32)
+    Y = Y.to_numpy(dtype=np.float32)
+    X_val = y_val = None
+    if not bt:
+        _, X_val, _, y_val = train_test_split(X, Y, test_size=0.2, random_state=1337)
 
     all_imps = [] if not bt else None
     all_preds = []
     edges_runs = [] if not bt else None
-    X_pred = preds[features].copy()
-    iterations = 100
-
-    for i in range(iterations):
-        model = create_model(X.shape[1])
-        opt = keras.optimizers.Adam(amsgrad=True)
-        model.compile(optimizer=opt, loss=sign_penalty)
-        reduce_lr = keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5)
-
-        verbose = 1 if not bt else 0
-        model.fit(X, Y, epochs=100, callbacks=[reduce_lr], verbose=verbose)
-
-        train_preds = model.predict(X, verbose=verbose)
-        test_preds = model.predict(preds[features], verbose=verbose)
-
+    X_pred = preds[features].to_numpy(dtype=np.float32)
+    target_offset = float(Y.mean()) if market == 'total' else 0.0
+    if market == 'total':
+        # Raw scoring levels need train-only scaling; center points for stable fitting.
+        center, scale = X.mean(axis=0), X.std(axis=0)
+        scale[scale < 1e-6] = 1
+        X, X_pred = (X - center) / scale, (X_pred - center) / scale
+        baseline = (baseline - center) / scale
+        Y = Y - target_offset
         if not bt:
-            r2 = sklearn.metrics.r2_score(Y, train_preds)
-            mae = sklearn.metrics.mean_absolute_error(Y, train_preds)
-            mse = sklearn.metrics.mean_squared_error(Y, train_preds)
-            print(f"\nIteration {i + 1}/{iterations}")
-            print(f"R²:  {r2:.4f}")
-            print(f"MAE: {mae:.4f}")
-            print(f"MSE: {mse:.4f}")
+            X_val, y_val = (X_val - center) / scale, y_val - target_offset
+    baseline_runs = []
 
-        # Always collect predictions for results
-        run_df = preds[['away_team', 'home_team']].copy()
-        run_df['prediction'] = np.asarray(test_preds).reshape(-1).astype(float)
-        all_preds.append(run_df)
-
-        if not bt:
-            # Integrated Gradients (explainability)
-            baseline_vec = tf.constant(feat_means.values[None, :], dtype=tf.float32)  # mean baseline
-            ig_attr, base_vals, preds_vals = integrated_gradients(
-                model,
-                tf.constant(X_pred.values, dtype=tf.float32),
-                baseline=baseline_vec,
-                m_steps=64,
-            )
-            edges_runs.append(ig_attr)
-
-            # Permutation importance for global FI chart
-            imp = permutation_importance(model, X_val, y_val, sign_penalty, random_state=42 + i)
-            all_imps.append(imp)
-
-            del model
-            tf.keras.backend.clear_session()
+    # Each process owns its TF runtime; never fork an initialized runtime or
+    # share Keras models across threads. Limit native thread pools per worker.
+    with parallel_config(backend='loky', inner_max_num_threads=1):
+        with Parallel(n_jobs=n_jobs, return_as='generator', batch_size=1,
+                      initializer=initialize_worker) as pool:
+            if n_jobs == 1:
+                if device == 'gpu':
+                    _warm_up_tf()
+                runs = (_train_iteration(i, X, Y, X_pred, X_val, y_val, baseline,
+                                         bt, epochs, device, random_state, market)
+                        for i in range(iterations))
+            else:
+                runs = pool(delayed(train_iteration)(
+                    i, X, Y, X_pred, X_val, y_val, baseline, bt, epochs, device, random_state, market)
+                    for i in range(iterations))
+            with tqdm(runs, total=iterations,
+                      desc=f'Training ensemble ({season} wk{week}, {n_jobs} {device} workers)') as progress:
+                for test_preds, imp, edges, metrics, base_pred in progress:
+                    run_df = preds[['away_team', 'home_team']].copy()
+                    run_df['prediction'] = test_preds.astype(float) + target_offset
+                    all_preds.append(run_df)
+                    if not bt:
+                        all_imps.append(pd.Series(imp, index=features))
+                        edges_runs.append(edges)
+                        baseline_runs.append(base_pred + target_offset)
+                        progress.set_postfix(r2=f'{metrics[0]:.3f}', mae=f'{metrics[1]:.3f}',
+                                             mse=f'{metrics[2]:.3f}', refresh=False)
 
     # Global Feature Importance chart (only when bt=False)
     if not bt:
@@ -459,7 +583,7 @@ def modelo(data, season, week, tag, bt: bool = False):
 
         os.makedirs(tag, exist_ok=True)
         fi_title = (
-            f"Aggregated Feature Importance — {season} Week {week} "
+            f"Training-sample importance (not out-of-sample evidence) — {season} Week {week} "
             f"(Lookback: {tag.split('_')[-1] if '_' in tag else '—'})\n"
             "Error bars show ±1 std across model runs"
             + (f"   |   Mean predicted spread: {avg_pred_spread:+.1f}" if np.isfinite(avg_pred_spread) else "")
@@ -485,7 +609,17 @@ def modelo(data, season, week, tag, bt: bool = False):
         agg['variance'] = agg['variance'].fillna(0.0)
         results = preds.merge(agg, on=['away_team', 'home_team'], how='left')
 
-    results['prediction'] = results['prediction'].round(1)
+    if not bt:
+        details = results[['away_team', 'home_team', 'prediction', 'variance']].copy()
+        details['baseline'] = np.mean(baseline_runs, axis=0)
+        for j, feature in enumerate(features):
+            details['attr_' + feature] = np.mean(edges_runs, axis=0)[:, j]
+        details['integration_residual'] = details.prediction - details.baseline - details.filter(like='attr_').sum(axis=1)
+        details.to_csv(os.path.join(tag, 'explanations.csv'), index=False)
+        pd.DataFrame({'feature': features, 'importance': avg_imp.reindex(features).values,
+                      'std': std_imp.reindex(features).values}).to_csv(os.path.join(tag, 'importance.csv'), index=False)
+    if round_predictions:
+        results['prediction'] = results['prediction'].round(1)
 
     # Edge charts per game (only when bt=False)
     if not bt:

@@ -7,12 +7,15 @@ import utils
 from tabulate import tabulate, tabulate_formats
 import os
 import glob
-import model_shredski
 import data_crunchski
 import data_crunchski_2
 import data_pullson
-from feature_select import run_feature_selection, FSConfig
 from pathlib import Path
+
+# model_shredski and feature_select both import TensorFlow at module level.
+# prep_test_train's worker processes re-import this file, so importing them up
+# here made every worker load TF (~5s per prep_test_train call) for code it
+# never runs. Imported inside the functions that actually need them instead.
 
 import requests
 pd.set_option('display.max_columns', None)
@@ -42,12 +45,58 @@ def download_team_logos(teams, logo_dir='data/logos'):
                 print(f"Failed to download logo for {team} from {url}")
 
 
+def validated_highlights(result, policy, model_spec, asof):
+    """Fail closed: a different ensemble or a future validation cannot qualify."""
+    empty = pd.Series(False, index=result.index)
+    try:
+        supported = (bool(model_spec) and policy['model_spec'] == model_spec
+                     and policy['status'] == 'PAPER QUALIFIED'
+                     and policy['evaluation'] == 'weekly_walk_forward'
+                     and tuple(policy['validated_through']) < tuple(asof)
+                     and policy['calibration']['n'] >= 60
+                     and policy['calibration']['pnl_units'] > 0
+                     and policy['validation']['n'] >= 60
+                     and policy['validation']['pnl_units'] > 0
+                     and policy['validation_roi_95'][0] > 0)
+        if not supported:
+            return empty
+        cutoff = policy['sd_cutoff']
+        edge = float(policy['diff_cutoff'])
+        if not np.isfinite(edge) or edge < 0 or (cutoff is not None and (not np.isfinite(cutoff) or cutoff < 0)):
+            return empty
+        selected = result['diff'].abs().ge(edge) & result['diff'].ne(0)
+        selected &= np.isfinite(result['diff']) & np.isfinite(result['sd']) & result['sd'].ge(0)
+        return selected if cutoff is None else selected & result['sd'].le(cutoff)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return empty
+
+
 def h_to_the_tml(pred, season, week, lookback, tag):
     qb = pd.read_parquet(f'data/qb/qb_{season}_{week}_{lookback}.parquet')
 
-    lines = data_pullson.pull_odds()
     sched = pd.read_parquet('data/sched.parquet')
     sched = sched[(sched.season == season) & (sched.week == week)]
+
+    # pull_odds() only ever returns UPCOMING games, and the merges below join on
+    # team names alone -- no season/week. For a week that has already been played
+    # that silently pairs some future rematch's line with this week's prediction
+    # (e.g. a Dec 2026 BUF@DEN line against a Jan 2026 divisional prediction).
+    # So for a finished week, use the stored closing line instead: the same
+    # spread_line back_test() grades against. Sign convention matches -- the
+    # odds-api away-side point and nflverse spread_line are both the expected
+    # home margin. Column order here must match pull_odds() because the 'var'
+    # rename below is positional.
+    if len(sched) and sched['result'].notna().all():
+        lines = pd.DataFrame({
+            'date': pd.to_datetime(sched['gameday']).dt.date,
+            'away_team': sched['away_team'],
+            'spread': sched['spread_line'],
+            'home_team': sched['home_team'],
+            'total': sched['total_line'],
+        }).reset_index(drop=True)
+        print(f"  lines     stored closing lines ({season} wk{week} already played)")
+    else:
+        lines = data_pullson.pull_odds()
 
     sched.loc[:, 'away_qb'] = sched['away_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
     sched.loc[:, 'home_qb'] = sched['home_qb_name'].apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
@@ -89,6 +138,15 @@ def h_to_the_tml(pred, season, week, lookback, tag):
             return None
 
     result['pick'] = result.apply(pick_func, axis=1)
+    result['sd'] = np.sqrt(result['var'].where(result['var'] >= 0))
+    import json
+    try:
+        policy = json.loads(Path('data/optimize_picks/current/neural_summary.json').read_text()).get('spread', {})
+    except (OSError, ValueError):
+        policy = {}
+    selected = validated_highlights(result, policy, pred.attrs.get('model_spec'), (season, week))
+    picks = set(result.loc[selected, 'pick'])
+    print(f'  highlights {len(picks)} picks supported by matching-model walk-forward validation')
 
     # Adding logos
     all_teams = pd.concat([result['away_team'], result['home_team']]).unique()
@@ -101,10 +159,11 @@ def h_to_the_tml(pred, season, week, lookback, tag):
                      'away_qb', 'away_qb_elo', 'away_logo', 'away_team',
                      'spread', 'prediction',
                      'home_team', 'home_logo', 'home_qb', 'home_qb_elo',
-                     'diff_abs', 'var', 'pick']]
+                     'diff_abs', 'sd', 'pick']]
 
     result['gameday'] = pd.to_datetime(result['gameday'])
-    result['gametime'] = pd.to_datetime(result['gametime']).dt.time
+    # gametime is always 'HH:MM'; naming the format skips the dateutil fallback
+    result['gametime'] = pd.to_datetime(result['gametime'], format='%H:%M').dt.time
 
     result = result.sort_values(by=['gameday', 'gametime', 'away_team'])
     result = result.dropna(subset=['prediction'])
@@ -130,35 +189,8 @@ def h_to_the_tml(pred, season, week, lookback, tag):
         else:
             return f'{val:.{precision}f}'
 
-    mapper = {1: '#ffca1e', 2: '#ffe590', 3: '#fef2c9'}
-    top_indexes = result.nlargest(3, 'diff').index
-
-    def highlight_cells(x):
-        if x == result.at[top_indexes[0], 'pick']:
-            return f'background-color: {mapper[1]}'
-        elif x == result.at[top_indexes[1], 'pick']:
-            return f'background-color: {mapper[2]}'
-        elif x == result.at[top_indexes[2], 'pick']:
-            return f'background-color: {mapper[3]}'
-        else:
-            return ''
-
-    picks = result.copy()
-    picks['abs_pred'] = abs(picks.prediction)
-    # picks = picks[picks['diff']>picks['var']]
-    picks = picks[picks['abs_pred'] > 1]
-    picks = picks[picks['var'] <= 0.5]
-    picks = picks[picks['diff'] > 3]['pick'].to_list()
-
-    ud = result.copy()
-    ud['objection'] = ((ud.spread * ud.prediction) < 0).astype(int)
-    ud = ud[ud.objection == 1]['pick'].to_list()
-
     def highlight_picks(x):
-        return f'background-color: {mapper[2]}' if x in picks else ''
-
-    def highlight_ud(x):
-        return f'background-color: {mapper[1]}' if x in ud else ''
+        return 'background-color: #ffe590' if x in picks else ''
 
     result = result.reset_index(drop=True)
 
@@ -167,8 +199,8 @@ def h_to_the_tml(pred, season, week, lookback, tag):
     # we wrap the local file path in an <img> tag.
     html = (result.style
             .background_gradient(subset=['diff'], cmap='Greens')
-            .background_gradient(subset=['var'], cmap='Reds')
-            .applymap(style_fonts_and_borders)
+            .background_gradient(subset=['sd'], cmap='Reds')
+            .map(style_fonts_and_borders)
             .format({
         'away_qb_elo': lambda x: set_precision(x, precision=1),
         'home_qb_elo': lambda x: set_precision(x, precision=1),
@@ -177,13 +209,12 @@ def h_to_the_tml(pred, season, week, lookback, tag):
         'spread': lambda x: style_spread(x, precision=1),
         'prediction': lambda x: style_spread(x, precision=1),
         'diff': lambda x: set_precision(x, precision=1),
-        'var': lambda x: set_precision(x, precision=1),
+        'sd': lambda x: set_precision(x, precision=1),
         # Wrap the logo file path in an <img> tag.
         'away_logo': lambda x: f'<img src="{x}" alt="Away Logo" height="25">' if pd.notnull(x) else '',
         'home_logo': lambda x: f'<img src="{x}" alt="Home Logo" height="25">' if pd.notnull(x) else ''
     })
-            .applymap(highlight_picks, subset=['away_team', 'home_team', 'pick'])
-            .applymap(highlight_ud, subset=['away_team', 'home_team', 'pick'])
+            .map(highlight_picks, subset=['away_team', 'home_team', 'pick'])
             )
     # IMPORTANT: disable escaping so that the <img> tags render as images.
     html.to_html(f'{tag}/html_{season}_{week}_{lookback}.html', escape=False)
@@ -191,6 +222,7 @@ def h_to_the_tml(pred, season, week, lookback, tag):
     print(tabulate(result, headers='keys'))
 
 def pull_bt(hist_reach: int, lookback: int):
+    import model_shredski  # local: keeps TF out of prep_test_train's workers
     sched = pd.read_parquet('data/sched.parquet')
     sched.dropna(subset=['result'], inplace=True)
     sw_pairs = (
@@ -513,6 +545,7 @@ def back_test(bt: int,
 
 
 def run_fs(data: pd.DataFrame, season: int, week: int):
+    from feature_select import run_feature_selection, FSConfig  # local: TF import
     df = data.copy()
     df["result"] = df["away_score"] - df["home_score"]
 
@@ -569,36 +602,50 @@ def run_fs(data: pd.DataFrame, season: int, week: int):
 
 
 def run(season, week, lookback, bt=False):
+    import model_shredski  # local: keeps TF out of prep_test_train's workers
+    from optimize_picks import PRODUCTION_FEATURES, neural_spec
     tag = f"data/results/{season}_{week}_{lookback}"
 
-    if bt and os.path.exists(f'{tag}/dat_{season}_{week}_{lookback}.parquet'):
-            df = pd.read_parquet(f'{tag}/dat_{season}_{week}_{lookback}.parquet')
-    else: df = data_crunchski_2.prep_test_train(season, week, lookback)
+    df = data_crunchski_2.prep_test_train(season, week, lookback, history_weeks=lookback)
 
     df = data_crunchski_2.additional_features(df)
+    # Match the packet/research row order so a fixed seed means the same fit.
+    df = df.sort_values(['season', 'week', 'away_team', 'home_team']).reset_index(drop=True)
 
     if not os.path.exists(f'{tag}'): os.makedirs(tag, exist_ok=True)
     df.to_parquet(f'{tag}/dat_{season}_{week}_{lookback}.parquet')
 
-    pred = model_shredski.modelo(df, season, week, tag, bt=bt)
+    features = [f for f in PRODUCTION_FEATURES if f != 'away_game_importance']
+    pred = model_shredski.modelo(df, season, week, tag, bt=bt, random_state=1337,
+                                features=features, round_predictions=False)
+    pred.attrs['model_spec'] = neural_spec(features, lookback, 'legacy')
+    pred.attrs['model_spec']['train_weeks'] = lookback
     return pred
 
 
 if __name__ == '__main__':
-    data_pullson.pull_sched(range(1999, 2026))
-    data_pullson.pull_pbp([2025])
-    # data_pullson.pull_ngs(range(1999, 2025))
-
-    season = 2025
-    week = 22
-    lookback = 20
-
-    sched = pd.read_parquet('data/sched.parquet')
-
-    pred = run(season, week, lookback, bt=False).round(1)
-    utils.pdf(pred)
-    h_to_the_tml(pred, season, week, lookback, tag = f"data/results/{season}_{week}_{lookback}")
-
-    # pull_bt(200,20)
-    # back_test(20)
-
+    import argparse
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'research':
+        from optimize_picks import main
+        main(sys.argv[2:])
+    else:
+        parser = argparse.ArgumentParser(description='Existing weekly model, with optional research packets.')
+        parser.add_argument('--season', type=int, default=2026)
+        parser.add_argument('--week', type=int, default=1)
+        parser.add_argument('--lookback', type=int, default=20)
+        parser.add_argument('--packet', action='store_true', help='Spread and total packet with cached neural explanations')
+        parser.add_argument('--refresh', action='store_true', help='Explicitly refresh the requested season only')
+        args = parser.parse_args()
+        if args.refresh:
+            data_pullson.pull_sched([args.season])
+            data_pullson.pull_pbp([args.season])
+        if args.packet:
+            from weekly_packet import neural_packet
+            pred = neural_packet(args.season, args.week, args.lookback)
+        else:
+            pred = run(args.season, args.week, args.lookback, bt=True)
+        if pred is not None:
+            utils.pdf(pred.assign(sd=np.sqrt(pred.variance)).drop(columns='variance').round(1))
+            h_to_the_tml(pred, args.season, args.week, args.lookback,
+                         tag=f'data/results/{args.season}_{args.week}_{args.lookback}')

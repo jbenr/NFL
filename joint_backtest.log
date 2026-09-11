@@ -1,0 +1,5 @@
+  target    2025 wk22   (lookback 20)
+  data      372 weeks, 4737 games   2008 wk12 → 2025 wk22
+  pbp       seasons 2007-2025
+  workers   1 of 32 cores  (serial)
+Crunching the numbers:   0%|          | 0/372 [00:00<?, ?it/s]Crunching the numbers:   5%|▍         | 17/372 [00:00<00:02, 166.64it/s]Crunching the numbers:   9%|▉         | 34/372 [00:00<00:02, 166.41it/s]Crunching the numbers:  14%|█▍        | 52/372 [00:00<00:01, 170.21it/s]
