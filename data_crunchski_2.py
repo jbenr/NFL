@@ -19,6 +19,48 @@ RATE_MODE = 'legacy'
 # backfilled across every season. See prep_test_train() for where this matters.
 RELOCATED_TEAMS = {'SD': 'LAC', 'STL': 'LA', 'OAK': 'LV'}
 
+# Non-numeric pbp columns the pipeline actually groups, filters or merges on.
+# Every numeric column is kept automatically (see _pbp_needed_columns) -- add
+# here only if a new feature reads a STRING column; numeric features never
+# need this list touched.
+_PBP_KEEP_NON_NUMERIC = {
+    'play_type', 'posteam', 'defteam', 'game_date', 'game_id',
+    'drive_time_of_possession', 'home_team', 'passer', 'rusher',
+}
+
+
+def _pbp_needed_columns(seasons):
+    """Which pbp columns _load_window should actually read off disk.
+
+    A large lookback means _load_window's rolling per-worker window covers
+    many weeks; at 396 raw columns (most of them unused strings), that window
+    alone measured ~5.85 GB per worker for a 150-week lookback -- with the
+    default 8 workers (forkserver, no memory sharing between them) that's
+    ~47 GB, well past WSL2's default ~31 GB ceiling, and a likely contributor
+    to crashes seen running large-lookback research jobs.
+
+    Narrowing at the pd.read_parquet(..., columns=...) call itself -- not
+    narrowing the frame after loading -- is what actually bounds memory:
+    parquet's columnar layout means an unrequested column is never read off
+    disk, not just dropped afterward. Measured on the same rows: 396 columns
+    ~4.9 GB vs. 33 needed columns ~537 MB, a ~9x reduction.
+
+    Determined from the union of the oldest and newest requested seasons'
+    schemas (not just one), in case nflverse's pbp column set drifted over the
+    decades this pipeline can reach back through. Computed once per
+    prep_test_train call, in the parent process, and passed to every worker --
+    not recomputed per worker.
+    """
+    ordered = sorted(seasons)
+    samples = {ordered[0], ordered[-1]} if ordered else set()
+    needed = set()
+    for szn in samples:
+        probe = pd.read_parquet(f'data/pbp/pbp_{szn}.parquet')
+        needed |= {c for c in probe.columns
+                  if c in _PBP_KEEP_NON_NUMERIC or pd.api.types.is_numeric_dtype(probe[c])}
+        del probe
+    return needed
+
 
 def slicer1(df, play_type, group, stat, agg):
     df1 = df.copy()
@@ -467,7 +509,7 @@ def comp_stats(stats, sched):
 _WORK = None
 
 
-def _build_work(seasons, sched, df, lookback, calculation='legacy'):
+def _build_work(seasons, sched, df, lookback, calculation='legacy', pbp_columns=None):
     global RATE_MODE
     RATE_MODE = calculation
     # Raw plays are loaded lazily, only after a weekly feature-cache miss.
@@ -479,12 +521,17 @@ def _build_work(seasons, sched, df, lookback, calculation='legacy'):
         'lookback': lookback,
         'cache_sources': [__file__, 'utils.py', 'data/sched.parquet'] + [f'data/pbp/pbp_{s}.parquet' for s in seasons],
         'calculation': calculation,
+        # Computed once in the parent (see prep_test_train) and handed to every
+        # worker, not recomputed per worker -- that would mean N_workers x 2
+        # extra full-season reads just to determine a column list every worker
+        # would derive identically anyway.
+        'pbp_columns': pbp_columns,
     }
 
 
-def _init_worker(seasons, sched, df, lookback, calculation='legacy'):
+def _init_worker(seasons, sched, df, lookback, calculation='legacy', pbp_columns=None):
     global _WORK
-    _WORK = _build_work(seasons, sched, df, lookback, calculation)
+    _WORK = _build_work(seasons, sched, df, lookback, calculation, pbp_columns)
 
 
 def _load_window(weeks):
@@ -498,7 +545,9 @@ def _load_window(weeks):
         if season not in _WORK['seasons']:
             continue
         missing = sorted(w for s, w in wanted if s == season and (s, w) not in index)
+        columns = _WORK.get('pbp_columns')
         plays = pd.read_parquet(f'data/pbp/pbp_{season}.parquet',
+                                columns=list(columns) if columns else None,
                                 filters=[('week', 'in', missing)])
         for week, frame in plays.groupby('week', sort=False):
             index[season, int(week)] = frame.copy()
@@ -614,16 +663,34 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='leg
         else:
             print(f"⚠️ File not found for season {szn_}. Skipping.")
 
+    # Computed once here (not per worker) and handed to every worker via
+    # initargs -- see _pbp_needed_columns' docstring for why this exists.
+    pbp_columns = _pbp_needed_columns(seasons) if seasons else set()
+
     # ngs = pd.read_parquet(f'data/ngs_passing.parquet')
 
     tings = df.groupby(['season', 'week']).agg('count').index.tolist()
 
     num_cores = os.cpu_count()
-    # NFL_WORKERS overrides. Worker count affects only scheduling, never results:
-    # executor.map yields in input order regardless of completion order.
-    # //4 measured fastest on 32 cores (8 procs); more workers costs more in
-    # per-worker startup than it saves on only ~28 tasks.
-    num_workers = int(os.environ.get("NFL_WORKERS") or 0) or max(1, num_cores // 4)
+    # NFL_WORKERS always overrides everything below -- set it explicitly if you
+    # want to override this heuristic's judgment.
+    #
+    # //4 measured fastest on 32 cores for typical (small) lookbacks -- more
+    # workers costs more in per-worker startup than it saves on ~28 tasks.
+    #
+    # _load_window's rolling per-worker window scales with lookback; measured
+    # unnarrowed at ~5.85 GB/worker for lookback=150 (18-season-equivalent
+    # span), which put the default 8 workers at ~47 GB against WSL2's default
+    # ~31 GB ceiling. Column narrowing (_pbp_needed_columns) should cut that
+    # ~9x on its own, but this scales the default down too, as a second,
+    # independent safety net rather than relying on narrowing alone to always
+    # apply cleanly (e.g. before caches are warm, or if pbp_columns ends up
+    # empty for some season range). Conservative on purpose: sized off the
+    # UNNARROWED per-worker figure, targeting a 20 GB ceiling for headroom
+    # against everything else running. Untested at real scale -- if this still
+    # crashes or is too conservative, that number needs revisiting.
+    _budget_workers = max(1, int(150 * 20 / (5.85 * max(lookback, 1))))
+    num_workers = int(os.environ.get("NFL_WORKERS") or 0) or max(1, min(num_cores // 4, _budget_workers))
 
     _span = (f"{tings[0][0]} wk{tings[0][1]} → {tings[-1][0]} wk{tings[-1][1]}"
              if tings else "no weeks")
@@ -631,15 +698,16 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='leg
     _games = len(df)
     print(f"  target    {szn} wk{week}   (lookback {lookback})")
     print(f"  data      {len(tings)} weeks, {_games} games   {_span}")
-    print(f"  pbp       seasons {_szns}")
+    print(f"  pbp       seasons {_szns}, {len(pbp_columns) or 'all'} columns read per week")
     print(f"  workers   {num_workers} of {num_cores} cores"
-          f"{'  (serial)' if num_workers == 1 else ''}")
+          f"{'  (serial)' if num_workers == 1 else ''}"
+          f"{'  (lookback-limited)' if num_workers == _budget_workers < num_cores // 4 else ''}")
 
     utils.make_dir("data/qb")  # create once here, not concurrently in workers
 
     if num_workers == 1:
         # serial path -- same code, easy to debug and profile
-        _init_worker(seasons, sched, df, lookback, calculation)
+        _init_worker(seasons, sched, df, lookback, calculation, pbp_columns)
         results = [_calc_week(sw) for sw in tqdm(tings, desc="Crunching the numbers")]
         _WORK = None  # Release raw plays before neural-net workers start.
     else:
@@ -654,7 +722,7 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='leg
                 max_workers=num_workers,
                 mp_context=ctx,
                 initializer=_init_worker,
-                initargs=(seasons, sched, df, lookback, calculation)) as executor:
+                initargs=(seasons, sched, df, lookback, calculation, pbp_columns)) as executor:
             results = list(tqdm(executor.map(_calc_week, tings),
                                 total=len(tings), desc="Crunching the numbers"))
 
