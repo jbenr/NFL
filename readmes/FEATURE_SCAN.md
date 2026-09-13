@@ -43,7 +43,7 @@ remain untouched.
 ```sh
 python shared_scoring.py --season 2026 --week 1
 python shared_scoring.py --season 2026 --week 1 --groups stadium field referee
-NFL_MODEL_JOBS=8 NFL_WORKERS=4 OPENBLAS_NUM_THREADS=1 python shared_research.py
+NFL_MODEL_JOBS=8 NFL_WORKERS=4 OPENBLAS_NUM_THREADS=1 python backtester.py
 ```
 
 The first command refreshes both markets from one paired ensemble. Each report has

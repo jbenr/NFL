@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 import shared_scoring as ss
+import data_crunchski_3 as dc
 import utils
 from playoff_importance import FEATURES as IMPORTANCE, game_importance
 
@@ -70,7 +71,7 @@ def context_panel(panel, groups, weather_source='forecast', weather_file=None, d
     result = panel.drop(columns=columns, errors='ignore').merge(
         sched[op.KEY + columns], on=op.KEY, validate='one_to_one')
     if 'referee' in groups:
-        result = ss.referee_tendencies(result, sched)
+        result = dc.referee_tendencies(result, sched)
     if 'importance' in groups:
         seasons = sorted(result.season.unique().tolist())
         weeks = result[['season', 'week']].drop_duplicates().sort_values(['season', 'week'])
@@ -99,7 +100,7 @@ def context_panel(panel, groups, weather_source='forecast', weather_file=None, d
 
 def prepare(panel, season, week, groups):
     base_groups = [g for g in groups if g in ss.GROUPS]
-    target, x, _, xp, _ = ss.prepare(panel, season, week, base_groups, 'differential')
+    target, x, _, xp, _ = dc.prepare(panel, season, week, base_groups, 'differential')
     prior = panel[(panel.season < season) | ((panel.season == season) & (panel.week < week))]
     extras, future, names = [], [], []
     if 'importance' in groups:
@@ -120,7 +121,7 @@ def prepare(panel, season, week, groups):
         center, scale = train.mean(), train.std(ddof=0).replace(0, 1)
         x = np.c_[x, (train - center) / scale]
         xp = np.c_[xp, (test - center) / scale]
-    names = ss.feature_names('differential') + target.attrs['context_names'] + names
+    names = dc.feature_names('differential') + target.attrs['context_names'] + names
     n, m = len(prior), len(target)
     # Each game is one training row. Reversal swaps entire side blocks.
     x, xp = np.c_[x[:n], x[n:]], np.c_[xp[:m], xp[m:]]
@@ -235,7 +236,7 @@ def main(args):
     import optimize_picks as op
     from weekly_packet import write_packets
     groups = tuple(sorted(set(args.groups)))
-    panel = op.build_panel(args.season, args.week, args.lookback, args.lookback, 'legacy')
+    panel = op.build_panel(args.season, args.week, args.lookback, args.lookback, 'mean')
     panel = context_panel(panel, groups, args.weather_source, args.weather_file, args.decision_hours)
     target, details, importance = fit_panel(panel, args.season, args.week, args.iterations,
                                             args.epochs, args.seed, args.jobs, groups)
@@ -276,7 +277,7 @@ def parser():
     p.add_argument('--jobs', type=int, default=8)
     p.add_argument('--groups', nargs='*', choices=GROUPS, default=GROUPS)
     p.add_argument('--weather-source', choices=['forecast', 'recorded'], default='forecast')
-    p.add_argument('--weather-file', help='Archived CSV/parquet forecasts; see JOINT_MODELS.md')
+    p.add_argument('--weather-file', help='Archived CSV/parquet forecasts; see readmes/JOINT_MODELS.md')
     p.add_argument('--decision-hours', type=float, default=24)
     p.add_argument('--output')
     return p

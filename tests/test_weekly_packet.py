@@ -1,7 +1,67 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 import pandas as pd
 import weekly_packet as wp
+
+
+class HeadlineTableTests(unittest.TestCase):
+    def _details(self, market, edge, sd):
+        # headline_table reads market_base/prediction/edge/variance directly
+        # regardless of market -- by the time two_sided_packet saves
+        # {market}_details.csv, market_details() has already made these
+        # columns market-appropriate (e.g. 'prediction' is total_prediction
+        # for the total market's own saved file).
+        return pd.DataFrame(dict(
+            season=[2026], week=[1], away_team=['ARI'], home_team=['LAC'],
+            market_base=[-9.5], prediction=[-9.5 + edge], edge=[edge],
+            variance=[sd ** 2], positive_odds=[-110.], negative_odds=[-110.],
+            residual=[float('nan')]))
+
+    @patch.object(wp, 'logo', return_value='')
+    @patch.object(wp, 'packet_schedule', return_value=pd.DataFrame(dict(
+        season=[2026], week=[1], away_team=['ARI'], home_team=['LAC'], gameday=['2026-09-13'], gametime=['16:25'])))
+    def test_pick_only_shown_when_cutoffs_are_actually_met(self, *_):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            cutoffs = wp.HIGH_CONFIDENCE_CUTOFFS['spread']
+            # Edge clears diff_cutoff but SD is too wide -- should still PASS.
+            self._details('spread', cutoffs['diff_cutoff'] + 1, cutoffs['sd_cutoff'] + 1).to_csv(
+                folder / 'spread_details.csv', index=False)
+            html = wp.headline_table(folder)
+            self.assertIn('<strong>PASS</strong>', html)
+            self.assertNotIn('<strong>ARI</strong>', html)
+            self.assertNotIn('<strong>LAC</strong>', html)
+
+    @patch.object(wp, 'logo', return_value='')
+    @patch.object(wp, 'packet_schedule', return_value=pd.DataFrame(dict(
+        season=[2026], week=[1], away_team=['ARI'], home_team=['LAC'], gameday=['2026-09-13'], gametime=['16:25'])))
+    def test_pick_shown_when_both_cutoffs_are_met(self, *_):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            cutoffs = wp.HIGH_CONFIDENCE_CUTOFFS['spread']
+            # Positive edge -> away team (ARI) qualifies as the pick.
+            self._details('spread', cutoffs['diff_cutoff'] + 1, cutoffs['sd_cutoff'] - 1).to_csv(
+                folder / 'spread_details.csv', index=False)
+            html = wp.headline_table(folder)
+            self.assertIn('<strong>ARI</strong>', html)
+
+    @patch.object(wp, 'logo', return_value='')
+    @patch.object(wp, 'packet_schedule', return_value=pd.DataFrame(dict(
+        season=[2026], week=[1], away_team=['ARI'], home_team=['LAC'], gameday=['2026-09-13'], gametime=['16:25'])))
+    def test_missing_market_shows_placeholder_not_a_crash(self, *_):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            cutoffs = wp.HIGH_CONFIDENCE_CUTOFFS['spread']
+            self._details('spread', cutoffs['diff_cutoff'] + 1, cutoffs['sd_cutoff'] - 1).to_csv(
+                folder / 'spread_details.csv', index=False)
+            html = wp.headline_table(folder)  # no total_details.csv at all
+            self.assertIn('class="muted">—</td>', html)
+
+    def test_no_details_files_returns_empty(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(wp.headline_table(Path(folder)), '')
 
 
 class PacketTests(unittest.TestCase):
@@ -13,6 +73,15 @@ class PacketTests(unittest.TestCase):
         labels = [wp.pretty(f) for f in ['home_field_adv', 'context_referee', 'away_rest_adv']]
         positions = [html.index(f'class="stat-name">{label}</div>') for label in labels]
         self.assertEqual(positions, sorted(positions))
+
+    def test_two_sided_weather_features_get_clean_labels(self):
+        # Without these, pretty() falls through to its generic underscore-
+        # replacement path and produces "Context weather feels like f" --
+        # functional but redundant/clunky (context_weather is a different,
+        # already-labeled single combined feature from an older model).
+        self.assertEqual(wp.pretty('context_weather_feels_like_f'), 'Feels like (°F)')
+        self.assertEqual(wp.pretty('context_weather_wind_mph'), 'Wind (mph)')
+        self.assertNotIn('Context weather', wp.pretty('context_weather_snow_depth_inches'))
 
     def test_home_field_grouping_preserves_sum_and_inputs(self):
         row = pd.Series(dict(away_team='ARI', home_team='LAC', market='spread',
@@ -43,16 +112,18 @@ class PacketTests(unittest.TestCase):
         self.assertIn(f'background:{wp.team_color("KC")}', html)
 
     @patch.object(wp, 'logo', return_value='')
-    def test_qbs_and_elo_in_header(self, _):
+    def test_qb_names_and_elo_dropped_from_header(self, _):
+        # Removed once the headline table's O/U column made the game
+        # header feel redundant -- QB/Elo detail still lives in the rich
+        # matchup-attribution chart below the header, just not up top too.
         row = pd.Series(dict(away_team='ARI', home_team='LAC', market_base=-10.,
                              prediction=-12.7, edge=-2.7, variance=3.24,
                              away_qb_name='Away Starter', home_qb_name='Home Starter',
                              away_raw_off_qb_elo=46.86, home_raw_off_qb_elo=42.80))
         html = wp.game_header(row, 'spread', 'PASS')
-        self.assertIn('Away Starter', html)
-        self.assertIn('(Elo 46.9)', html)
-        self.assertIn('Home Starter', html)
-        self.assertIn('(Elo 42.8)', html)
+        self.assertNotIn('Away Starter', html)
+        self.assertNotIn('Home Starter', html)
+        self.assertNotIn('Elo', html)
 
     @patch.object(wp, 'logo', return_value='')
     def test_compact_header_names_spread_team(self, _):

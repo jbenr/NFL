@@ -53,7 +53,12 @@ class JointTests(unittest.TestCase):
                            variance=4., baseline=40., edge=2., qualifies=False, pnl=0.,
                            odds=-110., assumed_odds=True, away_points=23., home_points=23.,
                            scores_implied=True, model_family='joint',
-                           attr_away_off_run_ypp=2., attr_away_def_run_ypp=4.)
+                           attr_away_off_run_ypp=2., attr_away_def_run_ypp=4.,
+                           # headline_table() re-settles the saved {market}_details.csv
+                           # to apply its own high-confidence cutoffs -- needs these three
+                           # even though this fixture's own qualifies/pnl/odds above are
+                           # already pre-settled for the per-game card, not the headline.
+                           positive_odds=-110., negative_odds=-110., residual=np.nan)
         config = dict(model='joint test', calculation='joint-matchup-v1', market='total',
                       lookback=20, input_mode='differential', status='PASS', reason='test',
                       context_note='Test context availability note')

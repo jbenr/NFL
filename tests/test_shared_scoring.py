@@ -50,6 +50,18 @@ class SharedScoringTests(unittest.TestCase):
         self.assertLess(abs(details.integration_residual.iloc[0]), .05)
         self.assertLess(abs(details.total_integration_residual.iloc[0]), .05)
 
+    def test_spread_and_total_are_both_derivable_from_the_same_team_points(self):
+        # summarize() keeps away_points/home_points precisely so spread and
+        # total can be recomputed from one shared prediction rather than
+        # trusted as two independently-fit numbers -- see optimus_prime's
+        # shared_predictions_{market}.csv (run_shared_track).
+        data = games()
+        target, x, y, xp, offset = ss.prepare(data, 2026, 1, inputs='differential')
+        run = ss.fit_member(0, x, y, xp, 13, 1, len(ss.METRICS))
+        details, _ = ss.summarize(target, [run, run], offset)
+        np.testing.assert_allclose(details.prediction, details.away_points - details.home_points)
+        np.testing.assert_allclose(details.total_prediction, details.away_points + details.home_points)
+
     def test_context_categories_use_training_only(self):
         data = games().assign(stadium_id='old', surface='grass', roof='outdoors', referee='known')
         data.loc[8, ['stadium_id', 'referee']] = ['new', 'unseen']

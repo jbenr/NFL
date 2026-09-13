@@ -61,7 +61,7 @@ missing in recorded mode because the schedule does not supply it here.
 
 ## Walk-forward tests (run separately from previews)
 
-    python shared_research.py --model joint --groups stadium field referee weather importance --start-season 2017 --validation-season 2025 --season 2025 --week 22
+    python backtester.py --model joint --groups stadium field referee weather importance --start-season 2017 --validation-season 2025 --season 2025 --week 22
 
 This compares joint baseline vs all requested context, predicting both markets
 for each historical week. Use --individual for baseline plus individual groups;

@@ -353,7 +353,13 @@ def pretty(feature):
               'stuff_%': 'Runs stopped at / behind line', 'sack_%': 'Sacks / pass play',
               'qb_hit_%': 'QB hits / pass play', 'penalties_pp': 'Penalty flags / play',
               'first_down_pp': 'First downs / play', 'turnovers_pp': 'Turnovers / play',
-              'explosive_run_%': 'Runs of 10+ yards', 'explosive_pass_%': 'Passes of 20+ yards'}
+              'explosive_run_%': 'Runs of 10+ yards', 'explosive_pass_%': 'Passes of 20+ yards',
+              # two_sided_packet's per-dimension weather features -- context_weather
+              # (below) is a different, single combined feature from an older model.
+              'context_weather_feels_like_f': 'Feels like (°F)', 'context_weather_wind_mph': 'Wind (mph)',
+              'context_weather_precip_inches': 'Precipitation (in)', 'context_weather_rain_inches': 'Rain (in)',
+              'context_weather_snowfall_inches': 'Snowfall (in)', 'context_weather_snow_depth_inches': 'Snow depth (in)',
+              'context_weather_indoor': 'Indoor'}
     if feature in labels:
         return labels[feature]
     label = feature.replace('away_off_', 'Away offense · ').replace('away_def_', 'Away defense · ')
@@ -405,15 +411,6 @@ def game_header(row, market, action):
     items = [('Market', market_value), ('Model', model_value),
              ('Edge', f'{lean} {abs(row.edge):.1f}'), ('SD', f'{np.sqrt(row.variance):.1f}')]
     summary = ''.join(f'<span><small>{label}</small><strong>{value}</strong></span>' for label, value in items)
-    qbs = []
-    for side in ['away', 'home']:
-        name = row.get(f'{side}_qb_name')
-        if not isinstance(name, str) or not name.strip():
-            name = row.get(f'{side}_qb_short', 'TBD')
-        name = name if isinstance(name, str) and name.strip() else 'TBD'
-        rating = row.get(f'{side}_raw_off_qb_elo', np.nan)
-        elo = f'{rating:.1f}' if pd.notna(rating) else '—'
-        qbs.append(f'<div class="banner-qb">{escape(name)}<br><small>(Elo {elo})</small></div>')
     scores = ''
     if pd.notna(row.get('away_points')) and pd.notna(row.get('home_points')):
         scores = (f'<div class="scoreboard" role="img" aria-label="Projected score: {away} {row.away_points:.1f} — {home} {row.home_points:.1f}">'
@@ -435,9 +432,9 @@ def game_header(row, market, action):
                 total_parts.append(f'{"Over" if gap > 0 else "Under" if gap < 0 else "Even"} {abs(gap):.1f}')
         if total_parts:
             total = '<div class="banner-total">O/U · ' + ' · '.join(total_parts) + '</div>'
-    return (f'<header class="match-banner"><div class="banner-team"><div class="identity">{logo(row.away_team)}{away}</div>{qbs[0]}</div>'
+    return (f'<header class="match-banner"><div class="banner-team"><div class="identity">{logo(row.away_team)}{away}</div></div>'
             f'<div class="banner-center"><span class="pill">{escape(action)}</span><div class="game-line">{summary}</div>{scores}{total}</div>'
-            f'<div class="banner-team"><div class="identity">{home}{logo(row.home_team)}</div>{qbs[1]}</div></header>')
+            f'<div class="banner-team"><div class="identity">{home}{logo(row.home_team)}</div></div></header>')
 
 
 def packet_tabs(active):
@@ -447,11 +444,111 @@ def packet_tabs(active):
                                 ('total', 'total.html', 'Totals'), ('importance', 'importance.html', 'Feature importance')]) + '</nav>'
 
 
+# Derived from your own two-sided backtests, not assumed: calibrated on
+# 2024 (data/bt/two_sided/2024), validated out-of-sample on 2025
+# (data/bt/two_sided/2025) via backtester.cutoff_grid on 2024, then
+# backtester.score with that exact cutoff replayed against 2025 --
+# see two_sided_diagnostics.py for the reusable version of this check.
+#   spread: diff>=5.0, sd<=4.83 -- 2024 calib 56.1% n=67 +5.16u ->
+#           2025 valid 57.1% n=57 +4.94u (held up, roi_95 still crosses 0)
+#   total:  diff>=4.0, sd<=4.43 -- 2024 calib 57.4% n=61 +5.74u ->
+#           2025 valid 61.2% n=49 +7.94u (held up better than calibration)
+# Two seasons is not a lot of validation data -- rebuild this as more
+# two-sided backtest seasons accumulate, don't treat it as permanent.
+HIGH_CONFIDENCE_CUTOFFS = {
+    'spread': dict(diff_cutoff=5.0, sd_cutoff=4.826863267174656),
+    'total': dict(diff_cutoff=4.0, sd_cutoff=4.429386074841524),
+}
+
+
+def headline_table(folder):
+    """Per-game summary across both markets -- same mechanism and column
+    order as main.py's original h_to_the_tml (pandas Styler, Greens/Reds
+    background_gradient on diff/sd, #ffe590 yellow highlight only on cells
+    that ARE the qualifying pick), minus QB/Elo, plus O/U appended in the
+    same flat style. Built from whichever {market}_details.csv this folder
+    already has (each write_packets(..., market=...) call saves its own).
+    'Pick' is a real qualify/pass call from HIGH_CONFIDENCE_CUTOFFS, not
+    "always show a lean" -- most games should say PASS, unhighlighted."""
+    from backtester import settle
+    frames = {}
+    for market in ['spread', 'total']:
+        path = folder / f'{market}_details.csv'
+        if path.exists():
+            cutoffs = HIGH_CONFIDENCE_CUTOFFS[market]
+            frames[market] = settle(pd.read_csv(path), cutoffs['diff_cutoff'], cutoffs['sd_cutoff'])
+    if not frames:
+        return ''
+    base = next(iter(frames.values()))
+    sched = packet_schedule()[['season', 'week', 'away_team', 'home_team', 'gameday', 'gametime']]
+    games = base[['season', 'week', 'away_team', 'home_team']].merge(
+        sched, on=['season', 'week', 'away_team', 'home_team'], how='left')
+
+    def market_fields(frame, g, market):
+        match = frame[(frame.away_team == g.away_team) & (frame.home_team == g.home_team)] if frame is not None else None
+        if match is None or match.empty:
+            return dict(line=np.nan, model=np.nan, diff=np.nan, sd=np.nan, pick=''), None
+        r = match.iloc[0]
+        pick = (r.away_team if r.edge > 0 else r.home_team) if market == 'spread' else ('OVER' if r.edge > 0 else 'UNDER')
+        pick = pick if bool(r.qualifies) else 'PASS'
+        return dict(line=r.market_base, model=r.prediction, diff=abs(r.edge), sd=r.sd, pick=pick), (pick if pick != 'PASS' else None)
+
+    rows = []
+    picks = set()
+    for _, g in games.iterrows():
+        spread, spread_pick = market_fields(frames.get('spread'), g, 'spread')
+        total, total_pick = market_fields(frames.get('total'), g, 'total')
+        for pick in [spread_pick, total_pick]:
+            if pick:
+                picks.add(pick)
+        # Same shape as h_to_the_tml (minus qb/qb_elo): away, then this
+        # market's line/model, then home, then diff/sd/pick -- O/U's own
+        # line/model/diff/sd/pick block appended after, team names not repeated.
+        rows.append(dict(
+            gameday=g.gameday, gametime=g.gametime,
+            away_logo=g.away_team, away_team=g.away_team,
+            line=spread['line'], model=spread['model'],
+            home_team=g.home_team, home_logo=g.home_team,
+            diff=spread['diff'], sd=spread['sd'], pick=spread['pick'],
+            total_line=total['line'], total_model=total['model'],
+            total_diff=total['diff'], total_sd=total['sd'], total_pick=total['pick']))
+    table = pd.DataFrame(rows)
+    table['gameday'] = pd.to_datetime(table.gameday)
+    table['gametime'] = pd.to_datetime(table.gametime, format='%H:%M', errors='coerce').dt.time
+    table = table.sort_values(['gameday', 'gametime', 'away_team']).reset_index(drop=True)
+
+    def signed(value, precision=1):
+        return '—' if pd.isna(value) else f'{value:+.{precision}f}'
+
+    def plain(value, precision=1):
+        return '—' if pd.isna(value) else f'{value:.{precision}f}'
+
+    def highlight_picks(value):
+        return 'background-color: #ffe590' if value in picks else ''
+
+    styled = (table.style.hide(axis='index')
+             .background_gradient(subset=['diff', 'total_diff'], cmap='Greens')
+             .background_gradient(subset=['sd', 'total_sd'], cmap='Reds')
+             .map(lambda _: 'font-size: 14px; font-family: Arial; border: 1px solid gray')
+             .format({
+                 'gameday': lambda x: x.strftime('%a %m/%d'),
+                 'gametime': lambda x: x.strftime('%I:%M %p').lstrip('0') if x else '—',
+                 'line': signed, 'model': signed, 'diff': plain, 'sd': plain,
+                 'total_line': signed, 'total_model': signed, 'total_diff': plain, 'total_sd': plain,
+                 'away_logo': lambda x: logo(x), 'home_logo': lambda x: logo(x),
+             })
+             .map(highlight_picks, subset=['away_team', 'home_team', 'pick', 'total_pick'])
+             .relabel_index(['Date', 'Time', 'Away logo', 'Away', 'Home', 'Home logo',
+                            'Line', 'Model', 'Diff', 'SD', 'Pick',
+                            'Total', 'Model', 'Diff', 'SD', 'O/U pick'], axis=1))
+    return styled.to_html()
+
+
 def write_packets(predictions, panel, importance, config, root):
     root = Path(root)
     market = config['market']
     for (season, week), games in predictions.groupby(['season', 'week']):
-        shared = config['calculation'] in ['shared-scoring-v1', 'joint-matchup-v1']
+        shared = config['calculation'] in ['shared-scoring-v1', 'joint-matchup-v1', 'two-sided-team-points-v1']
         snapshot = display_stats(season, week, config['lookback']) if market == 'spread' or shared else pd.DataFrame()
         folder = root / f'{int(season)}_{int(week):02d}'
         folder.mkdir(parents=True, exist_ok=True)
@@ -502,7 +599,7 @@ def write_packets(predictions, panel, importance, config, root):
             headline += (f'<p class="muted">Original production headline table. Analysis tabs: {escape(config["model"])}.</p>'
                          f'<iframe class="headline-frame" title="Original headline table" src="{escape(config["headline_href"], quote=True)}"></iframe>')
         else:
-            headline += f'<ul>{links}</ul>'
+            headline += headline_table(folder) + f'<ul>{links}</ul>'
         (folder / 'index.html').write_text(page(title, packet_tabs('headline') + headline, 'packet headline-shell'), encoding='utf-8')
         for missing in ['spread', 'total']:
             if not (folder / f'{missing}.html').exists():
@@ -544,10 +641,10 @@ def neural_packet(season, week, lookback=20, iterations=100, seed=1337, symmetri
     import model_shredski as ms
     import optimize_picks as op
     import utils
-    panel = op.build_panel(season, week, lookback, lookback, 'legacy')
+    panel = op.build_panel(season, week, lookback, lookback, 'mean')
     if symmetric:
         panel = op.symmetric_features(panel)
-    calculation = 'legacy-symmetric-v1' if symmetric else 'legacy'
+    calculation = 'mean-symmetric-v1' if symmetric else 'mean'
     output = Path(f'data/results/{season}_{week}_{lookback}/{"packet_symmetric" if symmetric else "packet"}')
     headline = None
     for market in (['spread'] if symmetric else ['spread', 'total']):
@@ -596,7 +693,7 @@ def refresh_packet(season, week, lookback=20, symmetric=False):
         saved_config = folder / f'{market}_config.json'
         config = json.loads(saved_config.read_text()) if saved_config.exists() else dict(
             model='Production ensemble', market=market, lookback=lookback,
-            calculation='legacy', status='PASS', reason='Validated cutoffs not established',
+            calculation='mean', status='PASS', reason='Validated cutoffs not established',
             headline_href=f'../../html_{season}_{week}_{lookback}.html',
             baseline_note='Baseline: ensemble prediction at mean training features.',
             importance_note='Training-sample permutation diagnostic; not held-out feature evidence.')
@@ -607,13 +704,28 @@ def refresh_packet(season, week, lookback=20, symmetric=False):
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Restyle saved weekly packets without retraining.')
+    parser = argparse.ArgumentParser(description='Build a weekly packet by fitting the chosen model '
+                                     '-- writes to data/results/{season}_{week}_{lookback}/packet_shared/.')
+    parser.add_argument('--model', choices=['two-sided', 'neural'], default='two-sided',
+                        help="'two-sided': league z-scores, symmetric usage scaling, historical weather "
+                             "(backtester.py --model two-sided's model). 'neural': the original single-network "
+                             "packet (main.py --packet's model). Default: two-sided.")
     parser.add_argument('--season', type=int, required=True)
     parser.add_argument('--week', type=int, required=True)
     parser.add_argument('--lookback', type=int, default=20)
-    parser.add_argument('--symmetric', action='store_true', help='Train/cache a separate 100-member symmetric spread preview')
+    parser.add_argument('--train-window', type=int, default=100, help='Two-sided only: training REG weeks')
+    parser.add_argument('--iterations', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--seed', type=int, default=1337)
+    parser.add_argument('--jobs', type=int)
+    parser.add_argument('--weather-file', help='Two-sided only: historical/reanalysis weather')
+    parser.add_argument('--forecast-file', help='Two-sided only: fallback for a target week with no historical '
+                        'weather yet (i.e. not played yet) -- pull it first with pull_weather.py --season ... '
+                        '--week ... --mode live. Defaults to data/weather/forecasts.parquet if it exists.')
     args = parser.parse_args()
-    if args.symmetric:
-        neural_packet(args.season, args.week, args.lookback, symmetric=True)
+    if args.model == 'two-sided':
+        from shared_scoring import two_sided_packet
+        two_sided_packet(args.season, args.week, args.lookback, args.train_window, args.iterations,
+                         args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file)
     else:
-        refresh_packet(args.season, args.week, args.lookback)
+        neural_packet(args.season, args.week, args.lookback, args.iterations, args.seed)

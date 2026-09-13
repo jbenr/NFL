@@ -4,7 +4,43 @@ Standalone downloader; does not train models or change existing backtests.
 
 For a weekly batch:
 
-    python pull_weather.py --games data/weather/games.csv
+    python pull_weather.py --season 2026 --week 1
+
+Reads data/sched.parquet, joins cached stadium coordinates by stadium_id, and
+prints schedule, request progress and weather results. Live mode skips games
+past the decision cutoff. Coordinates are cached from
+https://github.com/greerreNFL/stadiums in data/weather/stadium_coordinates.parquet.
+Custom CSV/parquet inputs remain available with --games PATH.
+
+## Next 72 hours where you are
+
+    python pull_weather.py --here
+
+Automatically looks up approximate coordinates via https://ipinfo.io/loc,
+prints the location used, and pulls the next 72 hours. VPNs can change the result.
+IPinfo sees your public IP; the returned coordinates are sent to Open-Meteo.
+To override IP location with map/GPS coordinates:
+
+    python pull_weather.py --here --latitude YOUR_LATITUDE --longitude YOUR_LONGITUDE
+
+Replace the placeholders with coordinates from your map/GPS (negative longitude
+for locations west of Greenwich). No game ID, kickoff or schedule is needed.
+Explicit coordinates bypass IPinfo and are sent to Open-Meteo.
+Prints only future hourly temperature, wind, gusts and
+precipitation in Eastern Time (America/New_York, automatic daylight saving),
+using dates and AM/PM. Hours before now or beyond 72 hours are excluded.
+These are model forecasts, not exact
+on-site measurements. This mode does not write to NFL caches or forecast files.
+
+## Custom games
+
+The --here terminal table uses true-color gradients: clock hours fade from gray
+overnight to white at midday (not calculated sunrise/sunset); temperature runs
+from dark blue at -30 F through icy blue at 32 F, yellow/orange, and red at 100 F.
+Precipitation becomes more blue toward 100% or 0.5 inches per hour; wind and
+gusts brighten from gray toward white at 40 mph. Scales are fixed and clamped.
+Precipitation inches display three decimals so small amounts stay visible.
+Redirected output stays plain; NO_COLOR=1 disables color in a terminal.
 
 Input CSV (or parquet) columns: game_id,kickoff,latitude,longitude.
 Use the schedule's exact game_id and actual stadium coordinates, including

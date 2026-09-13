@@ -1,4 +1,5 @@
 import pandas as pd
+import pyarrow.parquet as pq
 import numpy as np
 import utils
 # from opt_einsum.blas import tensor_blas
@@ -13,53 +14,40 @@ import os
 import re
 from pathlib import Path
 
-RATE_MODE = 'legacy'
+RATE_MODE = 'mean'
 
 # sched.parquet: historical abbreviation. pbp_*.parquet: current abbreviation,
 # backfilled across every season. See prep_test_train() for where this matters.
 RELOCATED_TEAMS = {'SD': 'LAC', 'STL': 'LA', 'OAK': 'LV'}
 
-# Non-numeric pbp columns the pipeline actually groups, filters or merges on.
-# Every numeric column is kept automatically (see _pbp_needed_columns) -- add
-# here only if a new feature reads a STRING column; numeric features never
-# need this list touched.
-_PBP_KEEP_NON_NUMERIC = {
+# Raw inputs consumed by calc_stats, calc_qb_elo and the rolling-week loader.
+# Add dependencies here when adding a feature; unrelated source fields stay out.
+_PBP_COLUMNS = {
     'play_type', 'posteam', 'defteam', 'game_date', 'game_id',
     'drive_time_of_possession', 'home_team', 'passer', 'rusher',
+    'season', 'week', 'yards_gained', 'complete_pass', 'series', 'series_success',
+    'first_down', 'third_down_converted', 'third_down_failed',
+    'fourth_down_converted', 'fourth_down_failed', 'interception', 'fumble_lost',
+    'penalty', 'drive', 'sack', 'qb_hit', 'qb_scramble', 'qb_kneel',
+    'rushing_yards', 'incomplete_pass', 'passing_yards', 'pass_touchdown',
+    'rush_attempt', 'rush_touchdown',
 }
 
 
 def _pbp_needed_columns(seasons):
-    """Which pbp columns _load_window should actually read off disk.
-
-    A large lookback means _load_window's rolling per-worker window covers
-    many weeks; at 396 raw columns (most of them unused strings), that window
-    alone measured ~5.85 GB per worker for a 150-week lookback -- with the
-    default 8 workers (forkserver, no memory sharing between them) that's
-    ~47 GB, well past WSL2's default ~31 GB ceiling, and a likely contributor
-    to crashes seen running large-lookback research jobs.
-
-    Narrowing at the pd.read_parquet(..., columns=...) call itself -- not
-    narrowing the frame after loading -- is what actually bounds memory:
-    parquet's columnar layout means an unrequested column is never read off
-    disk, not just dropped afterward. Measured on the same rows: 396 columns
-    ~4.9 GB vs. 33 needed columns ~537 MB, a ~9x reduction.
-
-    Determined from the union of the oldest and newest requested seasons'
-    schemas (not just one), in case nflverse's pbp column set drifted over the
-    decades this pipeline can reach back through. Computed once per
-    prep_test_train call, in the parent process, and passed to every worker --
-    not recomputed per worker.
-    """
-    ordered = sorted(seasons)
-    samples = {ordered[0], ordered[-1]} if ordered else set()
-    needed = set()
-    for szn in samples:
-        probe = pd.read_parquet(f'data/pbp/pbp_{szn}.parquet')
-        needed |= {c for c in probe.columns
-                  if c in _PBP_KEEP_NON_NUMERIC or pd.api.types.is_numeric_dtype(probe[c])}
-        del probe
-    return needed
+    """Validate required fields using metadata only, before starting workers."""
+    for season in sorted(set(seasons)):
+        path = f'data/pbp/pbp_{season}.parquet'
+        if pq.ParquetFile(path).metadata.num_rows == 0:
+            # The season being predicted, before any of its own games have
+            # been played, gets an empty placeholder file (0 rows, 0 columns)
+            # -- nothing ever reads plays FROM it (only prior weeks feed the
+            # rolling stats), so there's nothing here to validate.
+            continue
+        missing = _PBP_COLUMNS - set(pq.read_schema(path).names)
+        if missing:
+            raise ValueError(f'{path}: missing required feature inputs: {", ".join(sorted(missing))}')
+    return set(_PBP_COLUMNS)
 
 
 def slicer1(df, play_type, group, stat, agg):
@@ -188,127 +176,197 @@ def slicer(df, play_type, group, stat, agg,
     return df1
 
 
+# Recency-decay presets for calc_stats' weighted-family calculation modes --
+# same gradual_acceleration_with_floor curve (see its own docstring), tuned
+# to push more or less pooling weight onto the most recent games. 'weighted'
+# is the original preset (matches every prior run). 'steep' decays much
+# faster (higher steepness) and floors much lower, so a game from a couple
+# months back counts for far less than under 'weighted' -- e.g. a 70-day-old
+# game sits at ~78% weight under 'weighted' but ~43% under 'steep'; a
+# 150-day-old game sits at ~8% vs the 1% floor. Untested design choice, like
+# everything else this axis sweeps -- see optimus_prime.
+DECAY_PRESETS = {
+    'weighted': dict(total_season_days=160, steepness=3, floor_weight=0.05),
+    'steep': dict(total_season_days=160, steepness=10, floor_weight=0.01),
+}
+
+
+def _per_game_ingredients(df):
+    """One row per (game_id, team): every raw sum/count calc_stats' ratio
+    features are built from, at the single-game grain -- NOT yet divided
+    into a ratio (see _ratios_from_ingredients). Two different things
+    consume these across the lookback window's games (see calc_stats):
+
+    - mean/weighted/steep: _pool_ingredients sums the ingredients across
+      games first (optionally scaled by each game's recency weight), then
+      _ratios_from_ingredients takes each ratio ONCE from the pooled sums.
+      Equivalent to weighting every individual PLAY by its own game's
+      recency weight and pooling every play in the window directly, since
+      every play in a game shares that game's weight -- 'mean' is this same
+      pool with every game weighted equally (1.0).
+    - median: _ratios_from_ingredients runs directly on this per-game table
+      (one ratio value per game), then medians across games. A per-play
+      median is well-defined for a continuous stat (run_ypp/pass_ypp,
+      computed separately in calc_stats, not from these ingredients) but
+      degenerate for a 0/1 ratio numerator (median of a pile of 0s and 1s is
+      just 0 or 1) -- so every ratio feature goes through this per-game
+      route specifically for median, never for mean/weighted/steep.
+
+    Column names (once divided) match calc_stats' historical output
+    exactly. run_%/pass_%/possession_% (usage rate, time share) are
+    offense-only, as they always were -- there's no
+    def_run_%/def_pass_%/def_possession_%.
+
+    off_turnovers_pp/def_turnovers_pp's denominator (_turnover_opportunities)
+    counts p_types plays (kickoff/run/pass/punt/field_goal/extra_point,
+    every play where a turnover is physically possible) -- a different
+    "opportunity" population than penalties_pp (all plays) or
+    first_down_pp/third_down_%/fourth_down_% (scrimmage plays only).
+    Confirmed intentional, inherited from the original code."""
+    run = df[df.play_type == 'run']
+    pas = df[df.play_type == 'pass']
+    plays = df[df.play_type.isin(['run', 'pass'])]
+    p_types = ['kickoff', 'run', 'pass', 'punt', 'field_goal', 'extra_point']
+    special = df[df.play_type.isin(p_types)]
+
+    def build(side):
+        keys = ['game_id', side]
+        ing = pd.concat([
+            run.groupby(keys)['yards_gained'].agg(
+                _run_plays='size', _run_yards='sum',
+                _explosive_run=lambda s: (s >= 10).sum(), _stuff=lambda s: (s <= 0).sum()),
+            pas.groupby(keys)['yards_gained'].agg(
+                _pass_plays='size', _pass_yards='sum', _explosive_pass=lambda s: (s >= 20).sum()),
+            pas.groupby(keys)['complete_pass'].sum().rename('_completions'),
+            pas.groupby(keys)['sack'].sum().rename('_sacks'),
+            pas.groupby(keys)['qb_hit'].sum().rename('_qb_hits'),
+            plays.groupby(keys)['yards_gained'].agg(_scrimmage_plays='size'),
+            plays.groupby(keys)['first_down'].sum().rename('_first_downs'),
+            plays.groupby(keys)['third_down_converted'].sum().rename('_third_conv'),
+            plays.groupby(keys)['third_down_failed'].sum().rename('_third_fail'),
+            plays.groupby(keys)['fourth_down_converted'].sum().rename('_fourth_conv'),
+            plays.groupby(keys)['fourth_down_failed'].sum().rename('_fourth_fail'),
+            special.groupby(keys)['interception'].sum().rename('_turnovers'),
+            special.groupby(keys)['fumble_lost'].sum().rename('_fumbles'),
+            special.groupby(keys)['interception'].agg(_turnover_opportunities='size'),
+            df.groupby(keys)['penalty'].sum().rename('_penalties'),
+            df.groupby(keys)['penalty'].agg(_penalty_plays='size'),
+        ], axis=1)
+        ing.index.names = ['game_id', 'team']
+        return ing
+
+    offense, defense = build('posteam'), build('defteam')
+
+    # Series success: a flag repeated across every play in a series, so
+    # averaging within (game, series, team) just recovers it (dedup); sum
+    # and count of those per-series flags, per game, are the ingredients.
+    series = df.dropna(subset=['series'])
+    off_series = series.groupby(['game_id', 'series', 'posteam'])['series_success'].mean().reset_index()
+    off_series = off_series.groupby(['game_id', 'posteam'])['series_success'].agg(
+        _series_successes='sum', _series_count='count')
+    off_series.index.names = ['game_id', 'team']
+    def_series = series.groupby(['game_id', 'series', 'defteam'])['series_success'].mean().reset_index()
+    def_series = def_series.groupby(['game_id', 'defteam'])['series_success'].agg(
+        _series_successes='sum', _series_count='count')
+    def_series.index.names = ['game_id', 'team']
+    offense = offense.join(off_series, how='outer')
+    defense = defense.join(def_series, how='outer')
+
+    # Possession share's ingredients: seconds of clock held that game (sum
+    # of drive shares), and a constant 3600s "capacity" per game so pooling
+    # (summing both across games, weighted or not) recovers the same
+    # weighted-average share _ratios_from_ingredients gives every other
+    # feature -- no separate per-game/cross-game split needed here, this is
+    # already a single-game quantity.
+    poss = df.copy()
+    times = pd.to_datetime(poss['drive_time_of_possession'], format='%M:%S')
+    poss['_drive_sec'] = times.dt.minute * 60 + times.dt.second
+    off_poss = (poss.groupby(['game_id', 'drive', 'posteam'])['_drive_sec'].mean()
+                    .groupby(level=['game_id', 'posteam']).sum())
+    off_poss.index.names = ['game_id', 'team']
+    offense['_possession_seconds'] = off_poss
+    offense['_possession_capacity'] = 3600.0
+
+    return offense, defense
+
+
+def _ratios_from_ingredients(ing, side):
+    """Pure column arithmetic -- turns an ingredients table (see
+    _per_game_ingredients) into calc_stats' final named columns. Works
+    whether `ing` is indexed by team alone (pooled across the whole window,
+    for mean/weighted/steep) or by (game_id, team) (one row per game, for
+    median mode)."""
+    prefix = 'off_' if side == 'posteam' else 'def_'
+    out = pd.DataFrame(index=ing.index)
+    out[f'{prefix}run_ypp'] = ing._run_yards / ing._run_plays
+    out[f'{prefix}pass_ypp'] = ing._pass_yards / ing._pass_plays
+    if side == 'posteam':  # usage rate/possession share -- always offense-only, see docstring
+        out[f'{prefix}run_%'] = ing._run_plays / ing._scrimmage_plays
+        out[f'{prefix}pass_%'] = ing._pass_plays / ing._scrimmage_plays
+        out[f'{prefix}possession_%'] = ing._possession_seconds / ing._possession_capacity
+    out[f'{prefix}pass_completion_%'] = ing._completions / ing._pass_plays
+    out[f'{prefix}series_success_%'] = ing._series_successes / ing._series_count
+    out[f'{prefix}first_down_pp'] = ing._first_downs / ing._scrimmage_plays
+    out[f'{prefix}third_down_%'] = ing._third_conv / (ing._third_conv + ing._third_fail)
+    out[f'{prefix}fourth_down_%'] = ing._fourth_conv / (ing._fourth_conv + ing._fourth_fail)
+    out[f'{prefix}turnovers_pp'] = (ing._turnovers + ing._fumbles) / ing._turnover_opportunities
+    out[f'{prefix}penalties_pp'] = ing._penalties / ing._penalty_plays
+    out[f'{prefix}explosive_run_%'] = ing._explosive_run / ing._run_plays
+    out[f'{prefix}explosive_pass_%'] = ing._explosive_pass / ing._pass_plays
+    out[f'{prefix}stuff_%'] = ing._stuff / ing._run_plays
+    out[f'{prefix}sack_%'] = ing._sacks / ing._pass_plays
+    out[f'{prefix}qb_hit_%'] = ing._qb_hits / ing._pass_plays
+    return out
+
+
+def _pool_ingredients(ingredients, game_dates, calculation):
+    """Sum a per-(game_id, team) ingredients table (see
+    _per_game_ingredients) across games into one row per team. 'mean':
+    every game weighted equally (plain sum -- pools every play in the
+    window as if it were one flat set, no per-game step in the result).
+    'weighted'/'steep': each game's ingredients scaled by its DECAY_PRESETS
+    recency weight before summing -- equivalent to weighting every
+    individual play by its own game's weight, since every play in a game
+    shares it."""
+    if calculation not in ['mean', *DECAY_PRESETS]:
+        raise ValueError(f"calculation must be one of ['mean', 'median', {', '.join(DECAY_PRESETS)}], got {calculation!r}")
+    frame = ingredients.reset_index()
+    if calculation == 'mean':
+        weight = 1.0
+    else:
+        dates = frame['game_id'].map(game_dates)
+        days_from_max = (dates.max() - dates).dt.days.to_numpy()
+        weight = gradual_acceleration_with_floor(days_from_max, **DECAY_PRESETS[calculation])
+    result = ingredients.mul(weight, axis=0).groupby(frame['team'].to_numpy()).sum()
+    result.index.name = 'team'
+    return result
+
+
 def calc_stats(df):
-    guy = df[df['play_type']=='run'].groupby('posteam').agg(
-        'mean',numeric_only=True)[['yards_gained']]                                         # Off run yards per play
-    guy.columns = ['off_run_ypp']
+    if RATE_MODE not in ['mean', 'median', *DECAY_PRESETS]:
+        raise ValueError(f"RATE_MODE must be one of ['mean', 'median', {', '.join(DECAY_PRESETS)}], got {RATE_MODE!r}")
+    off_ing, def_ing = _per_game_ingredients(df)
+    if RATE_MODE == 'median':
+        off = _ratios_from_ingredients(off_ing, 'posteam').groupby(level='team').median()
+        dee = _ratios_from_ingredients(def_ing, 'defteam').groupby(level='team').median()
+        # run_ypp/pass_ypp: a true per-play median (continuous stat, unlike
+        # the 0/1-style ratios above where a play-level median would be
+        # degenerate) -- computed directly from df, bypassing ingredients.
+        off['off_run_ypp'] = df[df.play_type == 'run'].groupby('posteam')['yards_gained'].median()
+        off['off_pass_ypp'] = df[df.play_type == 'pass'].groupby('posteam')['yards_gained'].median()
+        dee['def_run_ypp'] = df[df.play_type == 'run'].groupby('defteam')['yards_gained'].median()
+        dee['def_pass_ypp'] = df[df.play_type == 'pass'].groupby('defteam')['yards_gained'].median()
+    else:
+        # game_date is only needed to build recency weights -- 'mean' weighs
+        # every game equally and never touches it, so callers wanting plain
+        # unweighted rates (e.g. weekly_packet.display_stats) don't need to
+        # supply it.
+        game_dates = (pd.to_datetime(df.groupby('game_id')['game_date'].first(), cache=False)
+                     if RATE_MODE != 'mean' else None)
+        off = _ratios_from_ingredients(_pool_ingredients(off_ing, game_dates, RATE_MODE), 'posteam')
+        dee = _ratios_from_ingredients(_pool_ingredients(def_ing, game_dates, RATE_MODE), 'defteam')
+    guy = off.join(dee, how='outer')
     guy.index.name = 'team'
-
-    if RATE_MODE == 'weighted':
-        guy['off_run_ypp'] = slicer(df, 'run', 'posteam', 'yards_gained', 'mean')
-
-    guy['def_run_ypp'] = slicer(df, 'run', 'defteam', 'yards_gained', 'mean')               # Def run yards per play
-
-    guy['off_pass_ypp'] = slicer(df, 'pass', 'posteam', 'yards_gained', 'mean')             # Off pass yards per play
-    guy['def_pass_ypp'] = slicer(df, 'pass', 'defteam', 'yards_gained', 'mean')             # Def pass yards per play
-
-    guy['off_run_%'] = slicer(df,'run', 'posteam', 'yards_gained', 'count')/\
-                      slicer(df,['run','pass'], 'posteam', 'yards_gained', 'count')            # Off run %
-    guy['off_pass_%'] = slicer(df,'pass', 'posteam', 'yards_gained', 'count')/\
-                      slicer(df,['run','pass'], 'posteam', 'yards_gained', 'count')            # Off pass %
-
-    guy['off_pass_completion_%'] = slicer(df,'pass', 'posteam', 'complete_pass', 'sum')/\
-                                   slicer(df,'pass', 'posteam', 'complete_pass', 'count')      # Off pass completion %
-    guy['def_pass_completion_%'] = slicer(df,'pass', 'defteam', 'complete_pass', 'sum')/\
-                                   slicer(df,'pass', 'defteam', 'complete_pass', 'count')      # Def pass completion %
-
-    temp = slicer(df,None, ['game_id','series','posteam'], 'series_success', 'mean').reset_index()
-    temp = temp.rename(columns={0: 'series_success'})
-    guy['off_series_success_%'] = \
-        slicer(temp,None, 'posteam', 'series_success', 'sum')/\
-        slicer(temp,None, 'posteam', 'series_success', 'count')             # Off series sucess %
-    temp = slicer(df,None, ['game_id','series','defteam'], 'series_success', 'mean').reset_index()
-    temp = temp.rename(columns={0: 'series_success'})
-    guy['def_series_success_%'] = \
-        slicer(temp,None, 'defteam', 'series_success', 'sum')/\
-        slicer(temp,None, 'defteam', 'series_success', 'count')             # Def series sucess %
-
-    guy['off_first_down_pp'] = slicer(df,['run','pass'], 'posteam', 'first_down', 'sum')/\
-                               slicer(df,['run','pass'], 'posteam', 'first_down', 'count')     # Off first downs per play
-    guy['def_first_down_pp'] = slicer(df,['run','pass'], 'defteam', 'first_down', 'sum')/\
-                               slicer(df,['run','pass'], 'defteam', 'first_down', 'count')     # Def first downs per play
-
-    guy['off_third_down_%'] = slicer(df,['run','pass'], 'posteam', 'third_down_converted', 'sum')/\
-                          (slicer(df,['run','pass'], 'posteam', 'third_down_converted', 'sum')+\
-                           slicer(df,['run','pass'], 'posteam', 'third_down_failed', 'sum'))   # Off 3rd down %
-    guy['def_third_down_%'] = slicer(df,['run','pass'], 'defteam', 'third_down_converted', 'sum')/\
-                          (slicer(df,['run','pass'], 'defteam', 'third_down_converted', 'sum')+\
-                           slicer(df,['run','pass'], 'defteam', 'third_down_failed', 'sum'))   # Def 3rd down %
-
-    guy['off_fourth_down_%'] = slicer(df,['run','pass'], 'posteam', 'fourth_down_converted', 'sum')/\
-                          (slicer(df,['run','pass'], 'posteam', 'fourth_down_converted', 'sum')+\
-                           slicer(df,['run','pass'], 'posteam', 'fourth_down_failed', 'sum'))   # Off 3rd down %
-    guy['def_fourth_down_%'] = slicer(df,['run','pass'], 'defteam', 'fourth_down_converted', 'sum')/\
-                          (slicer(df,['run','pass'], 'defteam', 'fourth_down_converted', 'sum')+\
-                           slicer(df,['run','pass'], 'defteam', 'fourth_down_failed', 'sum'))   # Def 3rd down %
-
-    p_types = ['kickoff', 'run', 'pass', 'punt','field_goal','extra_point']
-    guy['off_turnovers_pp'] = (slicer(df,p_types,'posteam', 'interception', 'sum')+\
-                              slicer(df,p_types, 'posteam', 'fumble_lost', 'sum'))/\
-                              slicer(df,p_types, 'posteam', 'interception', 'count')           # Off turnovers per play
-    guy['def_turnovers_pp'] = (slicer(df,p_types, 'defteam', 'interception', 'sum')+\
-                              slicer(df,p_types, 'defteam', 'fumble_lost', 'sum'))/\
-                              slicer(df,p_types, 'defteam', 'interception', 'count')           # Def turnovers per play
-
-    guy['off_penalties_pp'] = slicer(df,None, 'posteam','penalty','sum')/\
-                              slicer(df,None, 'posteam', 'penalty', 'count')                   # Off penalties per play
-    guy['def_penalties_pp'] = slicer(df,None, 'defteam','penalty','sum')/\
-                              slicer(df,None, 'defteam', 'penalty', 'count')                   # Def penalties per play
-
-    df1 = df.copy()
-    df1['drive_sec_of_possession'] = (pd.to_datetime(df1['drive_time_of_possession'], format='%M:%S').dt.second) + (
-                pd.to_datetime(df1['drive_time_of_possession'], format='%M:%S').dt.minute * 60)
-
-    temp = slicer(df1, None, ['game_id', 'drive', 'posteam'], 'drive_sec_of_possession', 'mean').reset_index()
-    temp = temp.rename(columns={0: 'drive_sec_of_possession'})
-    temp = slicer(temp, None, ['game_id', 'posteam'], 'drive_sec_of_possession', 'sum').reset_index()
-    temp = temp.rename(columns={0: 'drive_sec_of_possession'})
-    temp['drive_sec_of_possession'] = temp['drive_sec_of_possession'] / 3600
-    guy['off_possession_%'] = slicer(temp, None, 'posteam', 'drive_sec_of_possession', 'mean')  # Possession %
-
-    # # special teams
-    # guy['punt_avg'] = df.loc[df['play_type']=='punt'].groupby(['posteam']).agg(
-    # 'mean', numeric_only=True)['kick_distance']
-    # guy['return_avg'] = df.loc[df['play_type']=='punt'].groupby(['return_team']).agg(
-    # 'mean', numeric_only=True)['return_yards']
-    # # field goals
-    # # PAT 1, FG Missed -1, 0-39 3, 40-49 4, 50-59 5, 60+ 6
-    # fg = np.where(df[''])
-    # guy['field_goals'] = df.loc[df['play_type']=='field_goal'].groupby(['posteam']).agg('mean',numeric_only=True)['']
-    # print(tabulate(guy.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
-
-    # New features (same math)
-    guy['off_explosive_run_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] >= 10)],
-                                        'run', 'posteam', 'yards_gained', 'count') / \
-                                 slicer(df, 'run', 'posteam', 'yards_gained', 'count')
-    guy['def_explosive_run_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] >= 10)],
-                                        'run', 'defteam', 'yards_gained', 'count') / \
-                                 slicer(df, 'run', 'defteam', 'yards_gained', 'count')
-
-    guy['off_explosive_pass_%'] = slicer(df[(df['play_type'] == 'pass') & (df['yards_gained'] >= 20)],
-                                         'pass', 'posteam', 'yards_gained', 'count') / \
-                                  slicer(df, 'pass', 'posteam', 'yards_gained', 'count')
-    guy['def_explosive_pass_%'] = slicer(df[(df['play_type'] == 'pass') & (df['yards_gained'] >= 20)],
-                                         'pass', 'defteam', 'yards_gained', 'count') / \
-                                  slicer(df, 'pass', 'defteam', 'yards_gained', 'count')
-
-    guy['off_stuff_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] <= 0)],
-                                'run', 'posteam', 'yards_gained', 'count') / \
-                         slicer(df, 'run', 'posteam', 'yards_gained', 'count')
-    guy['def_stuff_%'] = slicer(df[(df['play_type'] == 'run') & (df['yards_gained'] <= 0)],
-                                'run', 'defteam', 'yards_gained', 'count') / \
-                         slicer(df, 'run', 'defteam', 'yards_gained', 'count')
-
-    guy['off_sack_%'] = slicer(df, 'pass', 'posteam', 'sack', 'sum') / \
-                       slicer(df, 'pass', 'posteam', 'sack', 'count')
-    guy['def_sack_%'] = slicer(df, 'pass', 'defteam', 'sack', 'sum') / \
-                       slicer(df, 'pass', 'defteam', 'sack', 'count')
-
-    guy['off_qb_hit_%'] = slicer(df, 'pass', 'posteam', 'qb_hit', 'sum') / \
-                         slicer(df, 'pass', 'posteam', 'qb_hit', 'count')
-    guy['def_qb_hit_%'] = slicer(df, 'pass', 'defteam', 'qb_hit', 'sum') / \
-                         slicer(df, 'pass', 'defteam', 'qb_hit', 'count')
-
     return guy
 
 
@@ -441,23 +499,43 @@ def rank_it(x):
 def rev_rank_it(x):
     x = x.fillna(x.median())
     return (len(x) - stats.rankdata(x, "average") + 1)/len(x)
+def z_it(x):
+    x = x.fillna(x.median())
+    sd = x.std(ddof=0)
+    return (x - x.mean()) / sd if sd > 1e-9 else x * 0.
+def rev_z_it(x):
+    return -z_it(x)
 
-def comp_stats(stats, sched):
-    # take calc'd stats and create a metric that can be dabbled upon
+COMP_STATS_SKIPS = ['run_%', 'pass_%']
+COMP_STATS_EXCEPTIONS = ['turnovers', 'penalties']
+
+
+def _normalize_stats(stats, rank_fn, rev_fn):
+    """Copy of `stats` (one row per team, this week's rolling snapshot) with
+    every off/def column replaced by rank_fn/rev_fn's normalized value,
+    oriented so higher is always better for that side of the ball: off uses
+    rank_fn except turnovers/penalties (rev_fn), def uses rev_fn except
+    turnovers/penalties (rank_fn). Usage-rate columns (COMP_STATS_SKIPS) stay
+    raw -- _opponent_adjusted_diffs multiplies by them, post-normalization,
+    when use_scaling is on. Pass (rank_it, rev_rank_it) for percentile,
+    (z_it, rev_z_it) for z-score -- same population (every team in this
+    week's snapshot), same directions, different normalization."""
     stats_ = stats.copy()
-
-    skips = ['run_%','pass_%']
-    exceptions = ['turnovers','penalties']
     for col in stats_.columns:
-        if any(skip in col for skip in skips): pass
-        else:
-            if "off" in col:
-                if any(exc in col for exc in exceptions): stats_[col] = rev_rank_it(stats_[col])
-                else: stats_[col] = rank_it(stats_[col])
-            elif "def" in col:
-                if any(exc in col for exc in exceptions): stats_[col] = rank_it(stats_[col])
-                else: stats_[col] = rev_rank_it(stats_[col])
+        if any(skip in col for skip in COMP_STATS_SKIPS):
+            continue
+        if 'off' in col:
+            stats_[col] = rev_fn(stats_[col]) if any(exc in col for exc in COMP_STATS_EXCEPTIONS) else rank_fn(stats_[col])
+        elif 'def' in col:
+            stats_[col] = rank_fn(stats_[col]) if any(exc in col for exc in COMP_STATS_EXCEPTIONS) else rev_fn(stats_[col])
+    return stats_
 
+
+def _opponent_adjusted_diffs(stats_, sched, use_scaling, suffix=''):
+    """Away/home opponent-adjusted differences from an already-normalized
+    per-team stat snapshot (see _normalize_stats). suffix distinguishes
+    parallel representations (e.g. '_z' for z-score) that share this same
+    off/def/scaling structure but normalize differently."""
     df_ = []
     for away, home in sched.groupby(['away_team','home_team']).agg('count').index:
         away = stats_[stats_.index==away]
@@ -471,23 +549,47 @@ def comp_stats(stats, sched):
         for col in away.columns.tolist():
             col_ = col[9:]
             if 'off' in col:
-                if 'pass' in col:
-                    try: df[col] = (away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0])*\
+                out = f'away_off_{col_}{suffix}'
+                if use_scaling and 'pass' in col:
+                    try: df[out] = (away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0])*\
                                    (away['away_off_pass_%'].iloc[0]+0.5)
                     except Exception as e: pass
-                elif 'run' in col:
-                    try: df[col] = (away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0])*\
+                elif use_scaling and 'run' in col:
+                    try: df[out] = (away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0])*\
                                    (away['away_off_run_%'].iloc[0]+0.5)
                     except Exception as e: pass
                 else:
-                    try: df[col] = away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0]
+                    try: df[out] = away[f'away_off_{col_}'].iloc[0] - home[f'home_def_{col_}'].iloc[0]
                     except Exception as e: pass
             elif 'def' in col:
-                try: df[col] = away[f'away_def_{col_}'].iloc[0] - home[f'home_off_{col_}'].iloc[0]
+                out = f'away_def_{col_}{suffix}'
+                try: df[out] = away[f'away_def_{col_}'].iloc[0] - home[f'home_off_{col_}'].iloc[0]
                 except Exception as e: print(e)
             else: print(f'no off or def in {col}')
         df_.append(df)
-    df = pd.concat(df_)
+    return pd.concat(df_)
+
+
+def comp_stats(stats, sched, use_scaling=True):
+    """use_scaling=True (default, matches all prior behavior): every off_pass_*
+    differential is multiplied by (away_off_pass_% + 0.5), and off_run_* by
+    (away_off_run_% + 0.5) -- a team that passes/runs more gets that stat
+    weighted up. use_scaling=False: plain difference for every column, same as
+    the def_ branch already does unconditionally. Untested design choice from
+    early in this project; this flag is what makes it testable rather than
+    permanent.
+
+    Produces two parallel sets of opponent-adjusted difference columns from
+    the same per-week, all-teams-in-the-league snapshot: away_off_X/away_def_X
+    (percentile-ranked, unchanged name/behavior) and away_off_X_z/away_def_X_z
+    (z-scored). Both normalize before differencing, and both apply
+    use_scaling's multiplier after normalizing -- see _normalize_stats and
+    _opponent_adjusted_diffs."""
+    ranked = _normalize_stats(stats, rank_it, rev_rank_it)
+    zscored = _normalize_stats(stats, z_it, rev_z_it)
+    df = _opponent_adjusted_diffs(ranked, sched, use_scaling)
+    df_z = _opponent_adjusted_diffs(zscored, sched, use_scaling, suffix='_z')
+    df = pd.merge(df, df_z, how='left', on=['away_team', 'home_team'])
     sched = pd.merge(sched, df, how='left', on=['away_team','home_team'])
 
     # Preserve absolute team rates for totals and readable weekly summaries.
@@ -509,7 +611,7 @@ def comp_stats(stats, sched):
 _WORK = None
 
 
-def _build_work(seasons, sched, df, lookback, calculation='legacy', pbp_columns=None):
+def _build_work(seasons, sched, df, lookback, calculation='mean', pbp_columns=None, use_scaling=True):
     global RATE_MODE
     RATE_MODE = calculation
     # Raw plays are loaded lazily, only after a weekly feature-cache miss.
@@ -521,17 +623,14 @@ def _build_work(seasons, sched, df, lookback, calculation='legacy', pbp_columns=
         'lookback': lookback,
         'cache_sources': [__file__, 'utils.py', 'data/sched.parquet'] + [f'data/pbp/pbp_{s}.parquet' for s in seasons],
         'calculation': calculation,
-        # Computed once in the parent (see prep_test_train) and handed to every
-        # worker, not recomputed per worker -- that would mean N_workers x 2
-        # extra full-season reads just to determine a column list every worker
-        # would derive identically anyway.
-        'pbp_columns': pbp_columns,
+        'pbp_columns': _PBP_COLUMNS if pbp_columns is None else pbp_columns,
+        'use_scaling': use_scaling,
     }
 
 
-def _init_worker(seasons, sched, df, lookback, calculation='legacy', pbp_columns=None):
+def _init_worker(seasons, sched, df, lookback, calculation='mean', pbp_columns=None, use_scaling=True):
     global _WORK
-    _WORK = _build_work(seasons, sched, df, lookback, calculation, pbp_columns)
+    _WORK = _build_work(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling)
 
 
 def _load_window(weeks):
@@ -545,9 +644,9 @@ def _load_window(weeks):
         if season not in _WORK['seasons']:
             continue
         missing = sorted(w for s, w in wanted if s == season and (s, w) not in index)
-        columns = _WORK.get('pbp_columns')
+        columns = _WORK.get('pbp_columns') or _PBP_COLUMNS
         plays = pd.read_parquet(f'data/pbp/pbp_{season}.parquet',
-                                columns=list(columns) if columns else None,
+                                columns=sorted(columns),
                                 filters=[('week', 'in', missing)])
         for week, frame in plays.groupby('week', sort=False):
             index[season, int(week)] = frame.copy()
@@ -559,7 +658,9 @@ def _load_window(weeks):
 
 def _calc_week(sw):
     s, w = sw
-    cached = utils.cache_path('weekly_features', [int(s), int(w), _WORK['lookback'], _WORK['calculation']], _WORK['cache_sources'])
+    cached = utils.cache_path('weekly_features',
+                              [int(s), int(w), _WORK['lookback'], _WORK['calculation'], _WORK['use_scaling']],
+                              _WORK['cache_sources'])
     if cached.exists():
         return pd.read_parquet(cached)
     sched = _WORK['sched']
@@ -604,19 +705,34 @@ def _calc_week(sw):
     calc = pd.merge(calc, qb, on='team', how='left').rename(columns={'weighted_qb_elo':'off_qb_elo'}).drop(columns='name')
     calc = pd.merge(calc, dee, on='team', how='left').set_index('team')
 
-    comp = comp_stats(calc, sched_)
+    comp = comp_stats(calc, sched_, _WORK['use_scaling'])
     utils.save_parquet(comp, cached)
     return comp
 
 
-def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='legacy'):
+def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='mean', use_scaling=True):
+    """use_scaling: comp_stats' pass_%/run_% usage multiplier, on by default
+    (matches every prior run). See comp_stats' own docstring.
+
+    calculation: how calc_stats combines a team's per-game stats across the
+    lookback window -- 'mean' (plain average across games, the clean
+    no-recency-weighting baseline), 'weighted' (recency-weighted average,
+    recent games count more, floored so old games are never zeroed out),
+    'steep' (same idea, much faster decay and a much lower floor -- recent
+    games dominate far more), or 'median' (per-game median across the
+    window, robust to a single explosive game). See DECAY_PRESETS/
+    _combine_games for the weighted-family curves. Replaces the old
+    'legacy' mode, which only partially applied its own weighting -- see
+    git history / conversation notes if you need the exact old (buggy)
+    behavior back."""
     global _WORK
-    if calculation not in ['legacy', 'weighted']:
-        raise ValueError('calculation must be legacy or weighted')
+    if calculation not in ['mean', 'median', *DECAY_PRESETS]:
+        raise ValueError(f"calculation must be one of ['mean', 'median', {', '.join(DECAY_PRESETS)}], got {calculation!r}")
     sources = [__file__, 'utils.py', 'data/sched.parquet'] + list(Path('data/pbp').glob('pbp_*.parquet'))
-    cached = utils.cache_path('features', [szn, week, lookback, history_weeks, calculation], sources)
+    cached = utils.cache_path('features', [szn, week, lookback, history_weeks, calculation, use_scaling], sources)
     if cached.exists():
-        print(f'  features  cached ({szn} wk{week}, lookback {lookback}, {calculation})')
+        print(f'  features  cached ({szn} wk{week}, lookback {lookback}, {calculation}, '
+              f'scaling={use_scaling})')
         return pd.read_parquet(cached)
     sched = pd.read_parquet('data/sched.parquet')
     sched = sched[['season','week','game_type','away_team','away_score','home_team','home_score','away_rest','home_rest',
@@ -707,7 +823,7 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='leg
 
     if num_workers == 1:
         # serial path -- same code, easy to debug and profile
-        _init_worker(seasons, sched, df, lookback, calculation, pbp_columns)
+        _init_worker(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling)
         results = [_calc_week(sw) for sw in tqdm(tings, desc="Crunching the numbers")]
         _WORK = None  # Release raw plays before neural-net workers start.
     else:
@@ -722,7 +838,7 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='leg
                 max_workers=num_workers,
                 mp_context=ctx,
                 initializer=_init_worker,
-                initargs=(seasons, sched, df, lookback, calculation, pbp_columns)) as executor:
+                initargs=(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling)) as executor:
             results = list(tqdm(executor.map(_calc_week, tings),
                                 total=len(tings), desc="Crunching the numbers"))
 

@@ -85,7 +85,7 @@ Archive/remove candidates:
   that workflow. Keep FEATURE_SCAN.md until its mixed research notes are reviewed.
 
 Keep:
-- joint_scoring.py, shared_scoring.py, shared_research.py, playoff_importance.py,
+- joint_scoring.py, shared_scoring.py, backtester.py, playoff_importance.py,
   modelo_workers.py, optimize_picks.py, edge_scan.py, weekly_packet.py, utils.py:
   current research/report/model dependencies. In particular, optimize_picks
   imports PRODUCTION_FEATURES from edge_scan, so edge_scan is NOT disposable.

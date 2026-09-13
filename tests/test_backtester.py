@@ -1,16 +1,34 @@
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 import pandas as pd
-from shared_research import evaluate, history_weeks
+from backtester import configure_workers, evaluate, history_weeks
 
 
-class SharedResearchTests(unittest.TestCase):
+class BacktesterTests(unittest.TestCase):
+    def test_preparation_workers_override_environment_not_training(self):
+        args = SimpleNamespace(prep_jobs=4, jobs=8)
+        with patch.dict(os.environ, {'NFL_WORKERS': '16'}):
+            configure_workers(args)
+            self.assertEqual(os.environ['NFL_WORKERS'], '4')
+            self.assertEqual(args.jobs, 8)
+            args.prep_jobs = 1
+            configure_workers(args)
+            self.assertEqual(os.environ['NFL_WORKERS'], '1')
+
+    def test_invalid_workers_leave_environment_unchanged(self):
+        for prep, training in [(0, 8), (-1, 8), (1, 0), (1, -1)]:
+            with self.subTest(prep=prep, training=training), patch.dict(os.environ, {'NFL_WORKERS': '2'}):
+                with self.assertRaises(ValueError):
+                    configure_workers(SimpleNamespace(prep_jobs=prep, jobs=training))
+                self.assertEqual(os.environ['NFL_WORKERS'], '2')
+
     def test_history_is_derived_from_start_and_end(self):
         schedule = pd.DataFrame([dict(season=s, week=w, game_type='REG')
                                  for s in range(2008, 2026) for w in range(1, 18)])
         args = SimpleNamespace(start_season=2010, season=2025, week=22)
-        with patch('shared_research.pd.read_parquet', return_value=schedule):
+        with patch('backtester.pd.read_parquet', return_value=schedule):
             self.assertEqual(history_weeks(args), 16 * 17 + 20)
             args.week = 10
             self.assertEqual(history_weeks(args), 15 * 17 + 10 + 19)

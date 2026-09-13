@@ -7,6 +7,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
+import backtester as bt
 import data_crunchski_2 as dc
 import optimize_picks as op
 import weekly_packet as wp
@@ -75,7 +76,7 @@ class ResearchTests(unittest.TestCase):
     def test_highlights_require_matching_past_validation_and_unrounded_limits(self):
         from main import validated_highlights
         from copy import deepcopy
-        spec = op.neural_spec(['home_field_adv'], 20, 'legacy')
+        spec = op.neural_spec(['home_field_adv'], 20, 'mean')
         policy = dict(model_spec=spec, status='PAPER QUALIFIED', evaluation='weekly_walk_forward',
                       validated_through=[2025, 22], calibration=dict(n=100, pnl_units=10),
                       validation=dict(n=100, pnl_units=10), validation_roi_95=[.01, .2],
@@ -128,7 +129,7 @@ class ResearchTests(unittest.TestCase):
                 return Path(folder) / (hashlib.sha256(str(config).encode()).hexdigest() + '.parquet')
             with patch.object(op.utils, 'cache_path', side_effect=cache):
                 first = op.weekly_predict(data, ['x', 'home_field_adv'], 5, bags=3)
-                with patch.object(op, 'make_pipeline', side_effect=AssertionError('cache miss')):
+                with patch.object(bt, 'make_pipeline', side_effect=AssertionError('cache miss')):
                     pd.testing.assert_frame_equal(first, op.weekly_predict(data, ['x', 'home_field_adv'], 5, bags=3))
                 data.loc[data.week_id >= 15, ['actual', 'residual']] += 1000
                 second = op.weekly_predict(data, ['x', 'home_field_adv'], 5, bags=3)

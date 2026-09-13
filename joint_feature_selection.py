@@ -10,7 +10,7 @@ import pandas as pd
 
 import joint_scoring as js
 import optimize_picks as op
-import shared_research as research
+import backtester as research
 import utils
 
 
@@ -151,7 +151,7 @@ def run(args):
     root = Path(args.output)
     root.mkdir(parents=True, exist_ok=True)
     sources = ['data/sched.parquet', 'data_crunchski_2.py', 'utils.py', 'optimize_picks.py',
-               'shared_research.py', 'joint_scoring.py', 'shared_scoring.py', 'playoff_importance.py']
+               'backtester.py', 'joint_scoring.py', 'shared_scoring.py', 'playoff_importance.py']
     sources += sorted(Path('data/pbp').glob('pbp_*.parquet'))
     if args.weather_file:
         sources.append(args.weather_file)
@@ -164,7 +164,7 @@ def run(args):
         panel = pd.read_parquet(path)
         print('Prepared panel: cached', flush=True)
     else:
-        panel = op.build_panel(args.season, args.week, research.history_weeks(args), 20, 'legacy')
+        panel = op.build_panel(args.season, args.week, research.history_weeks(args), 20, 'mean')
         panel = js.context_panel(panel, args.groups, args.weather_source,
                                  args.weather_file, args.decision_hours)
         utils.save_parquet(panel, path)
@@ -174,7 +174,7 @@ def run(args):
     if args.max_subsets < len(features) + 1:
         raise ValueError(f'max-subsets must be at least {len(features) + 1} for all single removals')
     config['source_sha256'] = hashlib.sha256(b''.join(Path(p).read_bytes() for p in
-        [__file__, 'joint_scoring.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py'])).hexdigest()
+        [__file__, 'joint_scoring.py', 'shared_scoring.py', 'data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])).hexdigest()
     stamp = hashlib.sha256(json.dumps(config, sort_keys=True).encode() +
                            pd.util.hash_pandas_object(panel, index=False).values.tobytes()).hexdigest()[:12]
     root = root / stamp

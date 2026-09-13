@@ -1,5 +1,4 @@
 """Shared team-points challenger: one scoring function, applied to both teams."""
-import argparse
 import inspect
 import os
 from pathlib import Path
@@ -7,102 +6,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from edge_scan import PRODUCTION_FEATURES
-
-METRICS = [f[len('away_off_'):] for f in PRODUCTION_FEATURES if f.startswith('away_off_')]
-FEATURES = [f'{unit}_{metric}' for metric in METRICS for unit in ['off', 'def']]
-GROUPS = {'stadium': ['stadium_id'], 'field': ['surface', 'roof'], 'referee': ['referee']}
-BASE_CONTEXT = ['home_field', 'rest_advantage']
-
-
-def referee_tendencies(games, history, prior_games=20):
-    """Pregame referee scoring averages, shrunk toward the prior league average."""
-    result = games.reset_index(drop=True).copy()
-    history = history.copy()
-    history['ref_total'] = history.away_score + history.home_score
-    history = history[np.isfinite(history.ref_total)]
-    for (season, week), block in result.groupby(['season', 'week']):
-        prior = history[(history.season >= season - 2) &
-                        ((history.season < season) | ((history.season == season) & (history.week < week)))]
-        league = float(prior.ref_total.mean()) if len(prior) else np.nan
-        grouped = prior.dropna(subset=['referee']).groupby('referee').ref_total.agg(['sum', 'count'])
-        counts = block.referee.map(grouped['count']).fillna(0)
-        sums = block.referee.map(grouped['sum']).fillna(0)
-        average = (sums + prior_games * league) / (counts + prior_games)
-        result.loc[block.index, 'referee_prior_games'] = counts
-        result.loc[block.index, 'referee_avg_total'] = average
-        result.loc[block.index, 'referee_league_total'] = league
-        result.loc[block.index, 'referee_total_delta'] = (average - league).fillna(0)
-    return result
-
-
-def feature_names(inputs):
-    if inputs not in ['separate', 'differential']:
-        raise ValueError('inputs must be separate or differential')
-    return ['diff_' + metric for metric in METRICS] if inputs == 'differential' else FEATURES
-
-
-def scoring_rows(games, inputs='separate'):
-    """Away rows followed by home rows; each sees its offense and opposing defense."""
-    blocks = []
-    for side, opponent in [('away', 'home'), ('home', 'away')]:
-        block = pd.DataFrame(index=games.index)
-        for metric in METRICS:
-            offense = games[f'{side}_raw_off_{metric}']
-            defense = games[f'{opponent}_raw_def_{metric}']
-            if inputs == 'differential':
-                block[f'diff_{metric}'] = offense - defense
-            else:
-                block[f'off_{metric}'] = offense
-                block[f'def_{metric}'] = defense
-        block['home_field'] = games.home_field_adv if side == 'home' else 0.
-        block['rest_advantage'] = games[f'{side}_rest'] - games[f'{opponent}_rest']
-        blocks.append(block)
-    return pd.concat(blocks, ignore_index=True)
-
-
-def prepare(games, season, week, groups=(), inputs='separate'):
-    features = feature_names(inputs)
-    if 'referee' in groups and 'referee_total_delta' not in games:
-        games = referee_tendencies(games, games)
-    prior = (games.season < season) | ((games.season == season) & (games.week < week))
-    train = games.loc[prior].copy()
-    target = games.loc[(games.season == season) & (games.week == week)].copy()
-    if len(train) < 2 or target.empty:
-        raise ValueError('Need completed training games and a nonempty target week')
-    y = np.r_[train.away_score, train.home_score].astype('float32')
-    if not np.isfinite(y).all():
-        raise ValueError('Shared scoring requires finite completed training scores')
-    x, xp = scoring_rows(train, inputs), scoring_rows(target, inputs)
-    context_names = BASE_CONTEXT.copy()
-    for group in groups:
-        if group == 'referee':
-            name = 'referee:prior_total_delta'
-            for frame, source in [(x, train), (xp, target)]:
-                frame[name] = np.tile(source.referee_total_delta.to_numpy(), 2)
-            context_names.append(name)
-            continue
-        for column in GROUPS[group]:
-            # Categories are learned from completed training games only.
-            for value in sorted(train[column].dropna().astype(str).unique()):
-                name = f'{group}:{column}={value}'
-                for frame, source in [(x, train), (xp, target)]:
-                    active = source[column].astype(str).eq(value).to_numpy(dtype='float32')
-                    frame[name] = (np.r_[np.zeros(len(source)), active * source.home_field_adv]
-                                   if group == 'stadium' else np.r_[active, active])
-                context_names.append(name)
-    fill = x.replace([np.inf, -np.inf], np.nan).median().fillna(0)
-    x = x.replace([np.inf, -np.inf], np.nan).fillna(fill)
-    xp = xp.replace([np.inf, -np.inf], np.nan).fillna(fill)
-    center, scale = x[features].mean(), x[features].std(ddof=0)
-    scale = scale.mask(scale < 1e-6, 1)
-    x[features], xp[features] = (x[features] - center) / scale, (xp[features] - center) / scale
-    # Same role-specific transform for both sides; context is a separate additive term.
-    offset = float(y.mean())
-    columns = features + context_names
-    target.attrs['context_names'] = context_names
-    target.attrs['model_features'] = features
-    return target, x[columns].to_numpy('float32'), y - offset, xp[columns].to_numpy('float32'), offset
+from data_crunchski_3 import (
+    METRICS, FEATURES, GROUPS, BASE_CONTEXT, referee_tendencies,
+    feature_names, scoring_rows, prepare,
+)
 
 
 def build_model(n_context=2, n_features=len(FEATURES)):
@@ -167,7 +74,11 @@ def summarize(target, runs, offset):
     result['total_variance'] = totals.var(0, ddof=1) if len(runs) > 1 else 0.
     result['total_baseline'] = bases[:count] + bases[count:]
     # Group the offense and opponent-defense effects for each matchup/metric.
-    for metric in METRICS:
+    # Only metrics actually in `features` -- METRICS is the full universe,
+    # but a narrowed subset (optimus_prime's shared-model track) means most
+    # calls now see fewer than that.
+    active_metrics = [m for m in METRICS if f'off_{m}' in features or f'diff_{m}' in features]
+    for metric in active_metrics:
         columns = ([features.index('diff_' + metric)] if 'diff_' + metric in features else
                    [features.index(f'off_{metric}'), features.index(f'def_{metric}')])
         result[f'attr_away_off_{metric}'] = attrs[:count, columns].sum(axis=1)
@@ -188,7 +99,19 @@ def summarize(target, runs, offset):
     return result, importance.sort_values('importance', ascending=False)
 
 
-def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=None, groups=(), inputs='separate'):
+def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=None, groups=(), inputs='separate',
+             metrics=None, progress_position=0):
+    """metrics: optional override of data_crunchski_3.METRICS -- a feature-
+    selected subset from optimus_prime's shared-model track. None (default,
+    every existing caller) uses the full production metric list, unchanged.
+    n_features for the model is derived from target.attrs['model_features']
+    below, so it adapts to a narrowed subset automatically.
+
+    progress_position: tqdm `position` for the ensemble-member bar below --
+    0 (default, every existing caller) is plain single-bar behavior; a
+    caller running its own stacked dashboard of outer bars (optimus_prime's
+    shared-model track) passes a position below its own bars so this one
+    nests underneath instead of fighting them for the same terminal line."""
     import optimize_picks as op
     import utils
     from joblib import Parallel, delayed, parallel_config
@@ -206,29 +129,29 @@ def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=N
         panel = panel.drop(columns=columns, errors='ignore').merge(sched[op.KEY + columns], on=op.KEY, validate='one_to_one')
         if 'referee' in groups:
             panel = referee_tendencies(panel, sched)
-    target, x, y, xp, offset = prepare(panel, season, week, groups, inputs)
+    target, x, y, xp, offset = prepare(panel, season, week, groups, inputs, metrics)
     fingerprint = [a.tobytes().hex() for a in [x, y, xp]]
     identity = [fingerprint, target[op.KEY].to_dict('list'), offset, iterations, epochs, seed, list(groups),
                 target.attrs['context_names'], inputs, target.attrs['model_features']]
-    cached = utils.cache_path('shared_scoring', identity, [__file__, 'model_shredski.py', 'modelo_workers.py'])
+    cached = utils.cache_path('shared_scoring', identity, [__file__, 'data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])
     importance_path = cached.with_suffix('.importance.parquet')
     engine = inspect.getsource(build_model) + inspect.getsource(fit_member)
     raw_cache = utils.cache_path('shared_scoring_members', identity + [engine],
                                 ['model_shredski.py', 'modelo_workers.py']).with_suffix('.npz')
     if cached.exists() and importance_path.exists():
         details, importance = pd.read_parquet(cached), pd.read_parquet(importance_path)
-        print('Shared scoring: cached')
+        tqdm.write('Shared scoring: cached')
     else:
         if raw_cache.exists():
             with np.load(raw_cache) as saved:
                 runs = list(zip(*(saved[name] for name in ['scores', 'attrs', 'bases', 'importance'])))
-            print('Shared scoring: rebuilding report from cached members')
+            tqdm.write('Shared scoring: rebuilding report from cached members')
         else:
             with parallel_config(backend='loky', inner_max_num_threads=1):
                 with Parallel(n_jobs=jobs, return_as='generator', batch_size=1, initializer=initialize_worker) as pool:
                     runs = list(tqdm(pool(delayed(fit_member)(i, x, y, xp, seed, epochs, len(target.attrs['model_features']))
-                                         for i in range(iterations)), total=iterations,
-                                     desc=f'Shared scoring ({season} wk{week}, {jobs} CPU workers)'))
+                                         for i in range(iterations)), total=iterations, position=progress_position,
+                                     leave=False, desc=f'Shared scoring ({season} wk{week}, {jobs} CPU workers)'))
             temporary = raw_cache.with_suffix('.tmp.npz')
             np.savez_compressed(temporary, **{name: np.stack([r[i] for r in runs])
                                 for i, name in enumerate(['scores', 'attrs', 'bases', 'importance'])})
@@ -237,6 +160,100 @@ def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=N
         utils.save_parquet(details, cached)
         utils.save_parquet(importance, importance_path)
     return target, details, importance
+
+
+def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=8):
+    """Same team-score network, now with both matchups and weather as inputs.
+
+    Returns (details, importance), schema-compatible with summarize()'s
+    output (attr_away_off_{metric}/attr_away_def_{metric}/baseline/
+    integration_residual, plus total_ counterparts) -- market_details and
+    weekly_packet.matchup_attribution work on it unchanged.
+
+    away_score and home_score are two independent evaluations of the same
+    shared-weight network, each on its own input row -- not one function
+    composed with itself, so there's no chain rule linking the two rows'
+    slots to each other. Integrated gradients' completeness axiom
+    guarantees sum(attributions) == f(input) - f(baseline) separately for
+    each row. margin = away_score - home_score, so margin's attribution
+    for ANY single input slot is just that slot's away-row attribution
+    minus its home-row attribution -- full stop, no cross-referencing
+    between different slots (e.g. own_off_{metric} and own_def_{metric}
+    each get their own independent slot-level attribution; they are not
+    combined with each other). total = away_score + home_score sums
+    instead of subtracting. Every slot (metric or context/weather) uses
+    this identical away-minus/plus-home rule; only the display label
+    differs (own_off_{metric} -> away_off_{metric}, etc.). Verified
+    empirically: prediction - baseline - sum(attr_) is ~0 (see
+    tests/test_two_sided.py) -- an earlier, over-engineered version of
+    this that tried to cross-reference off_{metric} with def_{metric}
+    broke that identity; this simpler version is the one that's actually
+    correct."""
+    import hashlib
+    import utils
+    from data_crunchski_3 import prepare_two_sided
+    from joblib import Parallel, delayed, parallel_config
+    from modelo_workers import initialize_worker
+    from tqdm import tqdm
+    if iterations < 2 or jobs < 1 or epochs < 1:
+        raise ValueError('Require iterations >= 2, jobs >= 1 and epochs >= 1')
+    target, x, y, xp, offset = prepare_two_sided(panel, season, week)
+    names = target.attrs['model_features'] + BASE_CONTEXT
+    digest = hashlib.sha256(b''.join(a.tobytes() for a in [x, y, xp])).hexdigest()
+    identity = [digest, names, offset, season, week, iterations, epochs, seed,
+               target[['away_team', 'home_team']].to_dict('list')]
+    cached = utils.cache_path('two_sided_scores', identity,
+                              [__file__, 'data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])
+    importance_path = cached.with_suffix('.importance.parquet')
+    if cached.exists() and importance_path.exists():
+        print(f'  {season} wk{week}: two-sided scores cached', flush=True)
+        return pd.read_parquet(cached), pd.read_parquet(importance_path)
+    n_features = len(target.attrs['model_features'])
+    with parallel_config(backend='loky', n_jobs=min(jobs, iterations), inner_max_num_threads=1):
+        runs = list(tqdm(Parallel(return_as='generator', initializer=initialize_worker)(
+            delayed(fit_member)(i, x, y, xp, seed, epochs, n_features) for i in range(iterations)),
+            total=iterations, desc=f'Two-sided scores ({season} wk{week})'))
+    count = len(target)
+    scores = np.stack([r[0] for r in runs]) + offset
+    away, home = scores[:, :count], scores[:, count:]
+    result = target[['away_team', 'home_team']].reset_index(drop=True).copy()
+    result['away_points'], result['home_points'] = away.mean(0), home.mean(0)
+    result['prediction'], result['variance'] = (away - home).mean(0), (away - home).var(0, ddof=1)
+    result['total_prediction'], result['total_variance'] = (away + home).mean(0), (away + home).var(0, ddof=1)
+    attrs = np.mean([r[1] for r in runs], axis=0)
+    bases = np.mean([r[2] for r in runs], axis=0) + offset
+    away_base, home_base = bases[:count], bases[count:]
+    result['baseline'], result['total_baseline'] = away_base - home_base, away_base + home_base
+
+    # IG completeness guarantees sum(attributions) == f(input) - f(baseline)
+    # for the away row and, separately, for the home row -- so margin's
+    # (= away_score - home_score) attribution for ANY single input slot is
+    # just that slot's away-row attribution minus its home-row attribution,
+    # full stop, no cross-referencing between different slots. (Total sums
+    # instead of subtracting.) own_off_{metric}/own_def_{metric} each get
+    # their own slot-level attribution, labeled away_off_{metric}/
+    # away_def_{metric} for display -- NOT combined with each other.
+    features = target.attrs['model_features']
+    names_all = features + BASE_CONTEXT
+    def label(name):
+        if name.startswith('own_off_'):
+            return f"away_off_{name[len('own_off_'):]}"
+        if name.startswith('own_def_'):
+            return f"away_def_{name[len('own_def_'):]}"
+        return {'home_field': 'home_field_adv', 'rest_advantage': 'away_rest_adv'}.get(name, f'context_{name}')
+    for j, name in enumerate(names_all):
+        feature = label(name)
+        result[f'attr_{feature}'] = attrs[:count, j] - attrs[count:, j]
+        result[f'total_attr_{feature}'] = attrs[:count, j] + attrs[count:, j]
+    result['integration_residual'] = result.prediction - result.baseline - result.filter(regex='^attr_').sum(axis=1)
+    result['total_integration_residual'] = (result.total_prediction - result.total_baseline
+                                            - result.filter(regex='^total_attr_').sum(axis=1))
+    imps = np.stack([r[3] for r in runs])
+    importance = pd.DataFrame({'feature': names, 'importance': imps.mean(0),
+                               'std': imps.std(0)}).sort_values('importance', ascending=False)
+    utils.save_parquet(result, cached)
+    utils.save_parquet(importance, importance_path)
+    return result, importance
 
 
 def market_details(details, market):
@@ -250,11 +267,67 @@ def market_details(details, market):
     return result
 
 
+def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100, epochs=100,
+                     seed=1337, jobs=None, weather_file=None, forecast_file=None):
+    """Single-week two-sided packet -- same model/inputs as backtester.py's
+    --model two-sided (league z-scores, symmetric usage scaling, historical
+    weather), but one target week instead of a season-long backtest, written
+    to data/results/{season}_{week}_{lookback}/packet_shared/ via
+    weekly_packet.write_packets. This is the ongoing production path for
+    that packet; fit_panel/preview (the older percentile-diff
+    representation) are retired.
+
+    forecast_file: falls back to a pulled forecast (pull_weather.py --season
+    ... --week ... --mode live) for the target week if it hasn't been played
+    yet and so has no historical/reanalysis weather -- see
+    data_crunchski_3.attach_historical_weather. Defaults to
+    data/weather/forecasts.parquet if that file exists, else omitted (a
+    missing-weather error for an unplayed week then means: go run
+    pull_weather.py for it first)."""
+    from types import SimpleNamespace
+    import data_crunchski_3 as dc3
+    from backtester import KEY, build_panel, history_weeks, market_panel, settle
+    from weekly_packet import write_packets
+    weather_file = Path(weather_file or 'data/weather/historical_features.parquet')
+    if not weather_file.exists():
+        raise ValueError(f'Missing historical weather: {weather_file}')
+    if forecast_file is None:
+        default_forecast = Path('data/weather/forecasts.parquet')
+        forecast_file = default_forecast if default_forecast.exists() else None
+    span = history_weeks(SimpleNamespace(start_season=season, season=season, week=week))
+    panel = build_panel(season, week, span + train_window - 20, lookback, 'steep', use_scaling=False)
+    panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+    target_rows = panel[(panel.season == season) & (panel.week == week)]
+    if target_rows.empty:
+        raise ValueError(f'{season} wk{week}: not present in the prepared panel')
+    wid = int(target_rows.week_id.iloc[0])
+    history = panel[panel.week_id < wid]
+    regular = sorted(history.loc[history.game_type.eq('REG'), 'week_id'].unique())
+    if len(regular) < train_window:
+        raise ValueError(f'{season} wk{week}: need {train_window} prior regular training weeks; got {len(regular)}')
+    data = pd.concat([history[history.week_id >= regular[-train_window]], target_rows]).sort_values(KEY)
+    details, importance = fit_two_sided(data, season, week, iterations, epochs, seed, jobs or min(iterations, 8))
+    config = dict(model=f'two-sided-team-points-v1 / {iterations} members', calculation='two-sided-team-points-v1',
+                  lookback=lookback, train_window=train_window, status='PASS', attribution_schema=2,
+                  reason='Experimental two-sided scoring with historical weather; no validated betting cutoffs',
+                  importance_note='Two-sided team-score training-sample permutation MSE diagnostic; not held-out betting evidence.',
+                  baseline_note='Both team scores share one network; each metric sums the away-attacking and '
+                                'home-attacking matchups (see fit_two_sided\'s docstring for the derivation).')
+    output = Path(f'data/results/{season}_{week}_{lookback}/packet_shared')
+    for market in ['spread', 'total']:
+        predictions = market_panel(target_rows, market).merge(
+            market_details(details, market), on=['away_team', 'home_team'], validate='one_to_one')
+        predictions['edge'] = predictions.prediction - predictions.market_base
+        write_packets(settle(predictions), panel, importance, dict(config, market=market), output)
+    print(f'Packet: {output / f"{season}_{week:02d}" / "index.html"}')
+    return details
+
+
 def preview(season, week, lookback=20, iterations=100, epochs=100, seed=1337, jobs=None, groups=(), inputs='differential'):
     import optimize_picks as op
     from weekly_packet import write_packets
     groups = tuple(sorted(set(groups)))
-    panel = op.build_panel(season, week, lookback, lookback, 'legacy')
+    panel = op.build_panel(season, week, lookback, lookback, 'mean')
     target, details, importance = fit_panel(panel, season, week, iterations, epochs, seed, jobs, groups, inputs)
     suffix = ('_differential' if inputs == 'differential' else '') + ('_' + '_'.join(groups) if groups else '')
     output = Path(f'data/results/{season}_{week}_{lookback}/packet_shared{suffix}')
@@ -284,15 +357,6 @@ def preview(season, week, lookback=20, iterations=100, epochs=100, seed=1337, jo
     return details
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--season', type=int, default=2026)
-    parser.add_argument('--week', type=int, default=1)
-    parser.add_argument('--lookback', type=int, default=20)
-    parser.add_argument('--iterations', type=int, default=100)
-    parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--seed', type=int, default=1337)
-    parser.add_argument('--jobs', type=int)
-    parser.add_argument('--groups', nargs='*', choices=list(GROUPS), default=[])
-    parser.add_argument('--inputs', choices=['differential', 'separate'], default='differential')
-    preview(**vars(parser.parse_args()))
+# No CLI here -- weekly_packet.py is the canonical entry point for building a
+# packet (`python weekly_packet.py --model two-sided --season ... --week ...`),
+# parameterized by which model to fit. This file just holds the model code.

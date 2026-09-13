@@ -618,7 +618,7 @@ def run(season, week, lookback, bt=False):
     features = [f for f in PRODUCTION_FEATURES if f != 'away_game_importance']
     pred = model_shredski.modelo(df, season, week, tag, bt=bt, random_state=1337,
                                 features=features, round_predictions=False)
-    pred.attrs['model_spec'] = neural_spec(features, lookback, 'legacy')
+    pred.attrs['model_spec'] = neural_spec(features, lookback, 'mean')
     pred.attrs['model_spec']['train_weeks'] = lookback
     return pred
 
