@@ -508,8 +508,10 @@ def compare(args):
 
 
 def two_sided_season(args):
-    """Fixed retrospective experiment; no model/feature/cutoff selection."""
-    from types import SimpleNamespace
+    """Fixed retrospective experiment; no model/feature/cutoff selection.
+    Evaluates every week from args.start_season's week 1 through
+    args.season/args.week, one continuous walk-forward -- args.start_season
+    defaults to args.season itself (one season) when not given."""
     import data_crunchski_3 as dc3
     if args.lookback < 1 or args.train_window < 1 or args.iterations < 2 or args.jobs < 1 or args.epochs < 1:
         raise ValueError('Lookback, training window, workers and epochs must be positive; members >= 2')
@@ -517,11 +519,12 @@ def two_sided_season(args):
     if not weather_file.exists():
         raise ValueError(f'Missing historical weather: {weather_file}')
     schedule = pd.read_parquet('data/sched.parquet')
-    scheduled = schedule[(schedule.season == args.season) & (schedule.week <= args.week)]
+    scheduled = schedule[(schedule.season >= args.start_season) &
+                         ((schedule.season < args.season) | ((schedule.season == args.season) & (schedule.week <= args.week)))]
     if scheduled.empty or scheduled[['away_score', 'home_score']].isna().any().any():
         raise ValueError('Need a completed season/window for this retrospective run')
-    end_week = int(scheduled.week.max())
-    config = dict(model='two-sided-team-points-v1', season=args.season, end_week=end_week,
+    end_week = int(scheduled[scheduled.season == args.season].week.max())
+    config = dict(model='two-sided-team-points-v1', start_season=args.start_season, season=args.season, end_week=end_week,
                   lookback=args.lookback, train_window=args.train_window, calculation='steep',
                   inputs='league_snapshot_zscore', usage_scaling='symmetric_post_normalization',
                   weather_source='historical_reanalysis', weather_file=str(weather_file),
@@ -531,8 +534,13 @@ def two_sided_season(args):
     fingerprint = utils.cache_path('two_sided_runs', config, [__file__, 'data_crunchski_3.py',
         'data_crunchski_2.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py',
         'data/sched.parquet', weather_file]).stem
-    output = Path(args.output or f'data/bt/two_sided/{args.season}/{fingerprint}')
-    print(f'Two-sided team scores: {args.season} weeks 1–{end_week}, {len(scheduled)} games\n'
+    # Keep the existing single-season path name unchanged (data/bt/two_sided/{season}/...)
+    # so this isn't a breaking rename for the common case; multi-season runs
+    # get their own {start_season}-{season} folder instead.
+    season_label = str(args.season) if args.start_season == args.season else f'{args.start_season}-{args.season}'
+    output = Path(args.output or f'data/bt/two_sided/{season_label}/{fingerprint}')
+    span_label = f'{args.season} weeks 1–{end_week}' if args.start_season == args.season else f'{args.start_season} wk1 – {args.season} wk{end_week}'
+    print(f'Two-sided team scores: {span_label}, {len(scheduled)} games\n'
           f'  steep / league z-scores / symmetric usage scaling / historical weather\n'
           f'  feature lookback {args.lookback}; training window {args.train_window} REG weeks\n'
           f'  {args.iterations} members, {args.prep_jobs} preparation / {args.jobs} training workers; pre-season warmup included\n'
@@ -540,14 +548,20 @@ def two_sided_season(args):
           f'  Output: {output}', flush=True)
     if args.plan:
         return config
-    span = history_weeks(SimpleNamespace(start_season=args.season, season=args.season, week=end_week))
-    panel = build_panel(args.season, end_week, span + args.train_window - 20,
-                        args.lookback, 'steep', use_scaling=False)
+    from types import SimpleNamespace
+    # end_week, not the raw args.week -- args.week can be past whatever's
+    # actually scheduled/complete for args.season (end_week is already
+    # clamped to that above), and history_weeks counts scheduled weeks
+    # regardless of whether they're played, so an uncapped args.week would
+    # over-count the required history span.
+    span = history_weeks(SimpleNamespace(start_season=args.start_season, season=args.season, week=end_week)) + max(args.train_window - 20, 0)
+    panel = build_panel(args.season, end_week, span, args.lookback, 'steep', use_scaling=False)
     panel = dc3.attach_historical_weather(panel, weather_file)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
     results, importances = [], []
-    evaluation = panel[(panel.season == args.season) & (panel.week <= end_week)]
+    evaluation = panel[(panel.season >= args.start_season) &
+                       ((panel.season < args.season) | ((panel.season == args.season) & (panel.week <= end_week)))]
     if set(evaluation.game_id) != set(scheduled.game_id):
         raise ValueError('Prepared evaluation games differ from the requested schedule')
     for (season, week), target in evaluation.groupby(['season', 'week'], sort=True):
@@ -603,7 +617,9 @@ if __name__ == '__main__':
     parser.add_argument('--plan', action='store_true', help='Print two-sided experiment settings without training')
     parser.add_argument('--season', type=int, default=2025)
     parser.add_argument('--week', type=int, default=22)
-    parser.add_argument('--start-season', type=int, default=2024)
+    parser.add_argument('--start-season', type=int, default=None,
+                        help='Two-sided: first season\'s week 1 to evaluate from (default: --season itself, '
+                             'i.e. one season). Shared/joint: 2024.')
     parser.add_argument('--validation-season', type=int, default=2025)
     parser.add_argument('--iterations', type=int, default=100)
     parser.add_argument('--seed', type=int, default=1337)
@@ -627,6 +643,24 @@ if __name__ == '__main__':
     except ValueError as error:
         parser.error(str(error))
     if args.model == 'two-sided':
+        # Multi-season by request: --start-season's week 1 through --season/
+        # --week, one continuous walk-forward. Default (no --start-season)
+        # stays a single season, matching the old behavior.
+        if args.start_season is None:
+            args.start_season = args.season
+        if args.start_season > args.season:
+            parser.error('--start-season must be <= --season')
+        # validation-season/groups/combined/individual/full-only/inputs/
+        # min-bets belong to the older shared/joint compare() path below and
+        # two_sided_season() never reads them -- error instead of a silent
+        # no-op if one of those got set alongside --model two-sided.
+        irrelevant = [('--validation-season', args.validation_season, 2025),
+                      ('--groups', args.groups, list(ss.GROUPS)), ('--combined', args.combined, False),
+                      ('--individual', args.individual, False), ('--full-only', args.full_only, False),
+                      ('--inputs', args.inputs, 'differential'), ('--min-bets', args.min_bets, 60)]
+        set_but_unused = [flag for flag, value, default in irrelevant if value != default]
+        if set_but_unused:
+            parser.error(f'{", ".join(set_but_unused)} have no effect on --model two-sided.')
         try:
             two_sided_season(args)
         except ValueError as error:
@@ -634,6 +668,8 @@ if __name__ == '__main__':
         raise SystemExit(0)
     if args.plan:
         parser.error('--plan is currently supported for --model two-sided only')
+    if args.start_season is None:
+        args.start_season = 2024
     if args.output is None:
         args.output = 'data/optimize_picks/shared_context' + ('_differential' if args.inputs == 'differential' else '')
         if args.model == 'joint':

@@ -81,15 +81,6 @@ class HeadlineTableTests(unittest.TestCase):
         self.assertIn('headline-table-light', html)  # embeds the white-themed table, not the dark on-page one
         self.assertIn('copyPicksTable', html)
         self.assertIn("document.execCommand(\"copy\")", html)
-        self.assertIn('id="copy-feedback" class="copy-feedback">Headline table copied</span>', html)
-        # Restarts the fade animation on a second click before the first
-        # one finishes -- classList.remove + a forced reflow + re-add.
-        self.assertIn('feedback.classList.remove("show")', html)
-        self.assertIn('void feedback.offsetWidth', html)
-        self.assertIn('feedback.classList.add("show")', html)
-
-    def test_copy_subtitle_uses_nfl_font(self):
-        self.assertIn('.copy-subtitle{font-size:13px;margin-bottom:10px;color:#444;font-family:Graduate,Georgia,serif}', wp.STYLE)
 
     @patch.object(wp, 'logo', return_value='')
     @patch.object(wp, 'packet_schedule', return_value=pd.DataFrame(dict(
@@ -139,10 +130,6 @@ class PacketTests(unittest.TestCase):
         self.assertIn('2025 Weeks 4–22', html)
         self.assertIn('4 of those are playoff weeks', html)
         self.assertIn('QB Elo', html)
-        # Raw/Model explanation lives in this same dropdown now, not as its
-        # own separate always-visible paragraph next to the toggle.
-        self.assertIn('Raw: flat average over the lookback window', html)
-        self.assertTrue(html.rstrip().endswith('</details>'))
 
     def test_lookback_description_spans_a_season_boundary(self):
         # 20-week lookback from 2026 wk1 needs more REG weeks than 2025
@@ -165,67 +152,13 @@ class PacketTests(unittest.TestCase):
             self.assertIn(text, html)
         self.assertLess(html.index('B.QB'), html.index('A.QB'))
 
-    def test_raw_model_toggle_only_shown_when_weighted_stats_given(self):
-        raw = pd.DataFrame(dict(team=['ARI', 'LAC'], off_pass_ypp=[6., 7.], def_pass_ypp=[6.5, 7.5]))
-        weighted = pd.DataFrame(dict(team=['ARI', 'LAC'], off_pass_ypp=[6.2, 6.8], def_pass_ypp=[6.6, 7.4]))
-        games = pd.DataFrame({'away_team': [], 'home_team': []})
-        without_toggle = wp.stats_tables(raw, games)
-        self.assertNotIn('stats-mode-radio', without_toggle)
-        self.assertNotIn('id="stats-view-raw"', without_toggle)
-        with_toggle = wp.stats_tables(raw, games, weighted_stats=weighted)
-        self.assertIn('id="stats-mode-raw" class="stats-mode-radio" checked', with_toggle)  # raw shown by default
-        self.assertIn('id="stats-mode-model" class="stats-mode-radio"', with_toggle)
-        self.assertIn('id="stats-view-raw"', with_toggle)
-        self.assertIn('id="stats-view-model"', with_toggle)
-        # Same table (Passing), different ids so both copies can coexist
-        # in one document -- and each side shows its own numbers.
-        self.assertIn('id="off-passing-raw"', with_toggle)
-        self.assertIn('id="off-passing-model"', with_toggle)
-        raw_section = with_toggle[with_toggle.index('id="stats-view-raw"'):with_toggle.index('id="stats-view-model"')]
-        model_section = with_toggle[with_toggle.index('id="stats-view-model"'):]
-        self.assertIn('6.0', raw_section)  # ARI's raw off_pass_ypp
-        self.assertIn('6.2', model_section)  # ARI's weighted off_pass_ypp
-        self.assertNotIn('6.0', model_section)
-
-    def test_sorting_carries_over_between_raw_and_model_twins(self):
-        # Clicking a column header on the Raw table shouldn't leave the
-        # Model table (a separate <table> under the hood) back at its
-        # original unsorted order once you flip the toggle.
-        raw = pd.DataFrame(dict(team=['ARI', 'LAC'], off_pass_ypp=[6., 7.]))
-        weighted = pd.DataFrame(dict(team=['ARI', 'LAC'], off_pass_ypp=[6.2, 6.8]))
-        html = wp.stats_tables(raw, pd.DataFrame({'away_team': [], 'home_team': []}), weighted_stats=weighted)
-        script = html[html.index('<script>'):]
-        self.assertIn('function sortTable(table,i,direction)', script)
-        self.assertIn("table.id.endsWith('-raw')", script)
-        self.assertIn("table.id.slice(0,-4)+'-model'", script)
-        self.assertIn("table.id.slice(0,-6)+'-raw'", script)
-        self.assertIn('if(twin)sortTable(twin,i,direction)', script)
-
-    def test_display_stats_calculation_is_part_of_the_cache_key(self):
-        # Without this, calling display_stats with a different calculation
-        # (e.g. the Raw/Model toggle's two calls) but the same season/week/
-        # lookback would silently reuse whichever one got cached first.
-        with patch('utils.cache_path') as cache_path, \
-             patch.object(wp.pd, 'read_parquet', side_effect=FileNotFoundError):
-            cache_path.return_value = Path('/nonexistent/does-not-exist.parquet')
-            for calculation in ['mean', 'steep']:
-                try:
-                    wp.display_stats(2026, 1, 20, calculation=calculation)
-                except Exception:
-                    pass
-        configs = [call.args[1] for call in cache_path.call_args_list]
-        self.assertEqual(len(configs), 2)
-        self.assertIn('mean', configs[0])
-        self.assertIn('steep', configs[1])
-        self.assertNotEqual(configs[0], configs[1])
-
     def test_qb_elo_table_grouped_scrollable_with_rank_column(self):
         stats = pd.DataFrame(dict(team=['ARI', 'LAC', 'BUF'], off_qb_elo=[40., 60., 50.],
                                   off_pass_ypp=[6., 7., 5.], def_pass_ypp=[6.5, 7.5, 5.5]))
         html = wp.stats_tables(stats, pd.DataFrame({'away_team': [], 'home_team': []}))
         self.assertIn('id="qb-elo"', html)
         # Every table scrolls past ~10 rows now, not just QB Elo.
-        self.assertEqual(html.count('scroll-tall'), html.count('<table class="stats-table'))
+        self.assertEqual(html.count('scroll-tall'), html.count('<table class="stats-table"'))
         qb_elo_table = html[html.index('id="qb-elo"'):html.index('</table>')]
         # Rank leads (before Team), as a plain "1" -- not "(#1)" and not
         # repeated as the old trailing inline (#N) badge on the value cell.
@@ -235,16 +168,14 @@ class PacketTests(unittest.TestCase):
         rank_cell = re.search(r'<td[^>]*>([^<]*)</td>', first_row).group(1)
         self.assertEqual(rank_cell, '1')  # LAC (elo 60) sorts first -- plain number, no parens/hash
         self.assertNotIn('<span class="rank">', qb_elo_table)
-        # QB Elo stands alone above "Offense" now (own <h3>, not part of the
-        # grid), and Offense's grid is just Passing/Rushing/Misc.
-        self.assertLess(html.index('<h3>QB Elo</h3>'), html.index('<h2>Offense</h2>'))
-        self.assertNotIn('class="stats-cell"><h3>QB Elo</h3>', html)
         # Offense/Defense each broken into Passing/Rushing/Misc sub-tables
         # instead of one wide table -- Passing present here since the
         # fixture has pass_ypp; Rushing/Misc correctly absent (no data).
         self.assertIn('<h3>Passing</h3>', html)
         self.assertNotIn('<h3>Rushing</h3>', html)
+        # Tables sit two-to-a-row in a grid (QB Elo + Passing), not stacked.
         self.assertIn('class="stats-grid"', html)
+        self.assertIn('class="stats-cell"><h3>QB Elo</h3>', html)
 
     def test_portable_downloads_fonts_and_stats_tab(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,8 @@
 """Shared team-points challenger: one scoring function, applied to both teams."""
 import inspect
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -310,16 +312,52 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     config = dict(model=f'two-sided-team-points-v1 / {iterations} members', calculation='two-sided-team-points-v1',
                   lookback=lookback, train_window=train_window, status='PASS', attribution_schema=2,
                   reason='Experimental two-sided scoring with historical weather; no validated betting cutoffs',
-                  importance_note='Two-sided team-score training-sample permutation MSE diagnostic; not held-out betting evidence.',
+                  importance_note='Each bar is a paired refit/drop test: remove one feature (from both the '
+                                  'away-attacking and home-attacking sides of this shared-weight network), '
+                                  'retrain, and see how prediction error on the training sample changed. '
+                                  'Positive means removing it made the model worse (it was pulling weight); '
+                                  'negative means removing it made the model better (it was actively hurting '
+                                  'predictions). This is a training-sample diagnostic, not held-out betting '
+                                  'evidence, and correlated features can substitute for one another -- a low '
+                                  "score doesn't mean a feature is useless, just that something else covers it.",
                   baseline_note='Both team scores share one network; each metric sums the away-attacking and '
                                 'home-attacking matchups (see fit_two_sided\'s docstring for the derivation).')
-    output = Path(f'data/results/{season}_{week}_{lookback}/packet_shared')
-    for market in ['spread', 'total']:
-        predictions = market_panel(target_rows, market).merge(
-            market_details(details, market), on=['away_team', 'home_team'], validate='one_to_one')
-        predictions['edge'] = predictions.prediction - predictions.market_base
-        write_packets(settle(predictions), panel, importance, dict(config, market=market), output)
-    print(f'Packet: {output / f"{season}_{week:02d}" / "index.html"}')
+    # write_packets needs its usual index/spread/total/importance/stats
+    # pages + CSVs on disk to cross-reference each other and to bundle into
+    # one portable file (bundle_single_file, called from inside
+    # write_packets) -- only packet.html and the small, prediction-free
+    # {market}_config.json (model/notes metadata, already visible as text
+    # on the page -- kept only because refresh_packet() reads it back) are
+    # worth keeping afterward; the rest is built in a scratch directory and
+    # discarded. NOTE: refresh_packet(shared=True) can no longer restyle a
+    # saved packet without refitting -- the *_details.csv/*_importance.csv
+    # it needs for that no longer get kept on disk. That's an accepted
+    # tradeoff for not cluttering data/results/, not an oversight.
+    final_folder = Path(f'data/results/{season}_{week}_{lookback}/packet_shared') / f'{season}_{week:02d}'
+    with tempfile.TemporaryDirectory() as scratch:
+        scratch_output = Path(scratch)
+        for market in ['spread', 'total']:
+            predictions = market_panel(target_rows, market).merge(
+                market_details(details, market), on=['away_team', 'home_team'], validate='one_to_one')
+            predictions['edge'] = predictions.prediction - predictions.market_base
+            write_packets(settle(predictions), panel, importance, dict(config, market=market), scratch_output)
+        scratch_folder = scratch_output / f'{season}_{week:02d}'
+        bundled = scratch_folder / 'packet.html'
+        if not bundled.exists():
+            raise ValueError(f'{season} wk{week}: packet bundling failed -- no pages were written')
+        # Wipe rather than merge -- a folder from before this scratch-dir
+        # change existed would otherwise keep its old index.html/*.csv/etc
+        # forever (this move only ever adds files, never removes stale
+        # ones). final_folder is exclusively owned by this function.
+        shutil.rmtree(final_folder, ignore_errors=True)
+        final_folder.mkdir(parents=True, exist_ok=True)
+        final_path = final_folder / 'packet.html'
+        shutil.move(str(bundled), str(final_path))
+        for market in ['spread', 'total']:
+            saved_config = scratch_folder / f'{market}_config.json'
+            if saved_config.exists():
+                shutil.move(str(saved_config), str(final_folder / saved_config.name))
+    print(f'Packet: {final_path}')
     return details
 
 

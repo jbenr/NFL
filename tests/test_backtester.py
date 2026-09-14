@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 import pandas as pd
-from backtester import configure_workers, evaluate, history_weeks
+from backtester import configure_workers, evaluate, history_weeks, two_sided_season
 
 
 class BacktesterTests(unittest.TestCase):
@@ -35,6 +35,47 @@ class BacktesterTests(unittest.TestCase):
             args.start_season = 2008
             with self.assertRaises(ValueError):
                 history_weeks(args)
+
+    def _schedule(self, seasons=range(2008, 2026), weeks=range(1, 18)):
+        return pd.DataFrame([dict(season=s, week=w, game_type='REG', game_id=f'{s}_{w}',
+                                  away_score=10., home_score=20.) for s in seasons for w in weeks])
+
+    def test_two_sided_plan_spans_start_season_through_season(self):
+        # --plan short-circuits before build_panel/attach_historical_weather --
+        # cheap enough to run for real, no mocked model fit needed.
+        args = SimpleNamespace(season=2025, week=17, start_season=2010, lookback=20, train_window=100,
+                               iterations=100, jobs=8, epochs=100, seed=1337, prep_jobs=1,
+                               weather_file=None, plan=True, output=None)
+        with patch('backtester.pd.read_parquet', return_value=self._schedule()), \
+             patch('backtester.Path.exists', return_value=True):
+            config = two_sided_season(args)
+        self.assertEqual(config['start_season'], 2010)
+        self.assertEqual(config['season'], 2025)
+        self.assertEqual(config['end_week'], 17)
+
+    def test_two_sided_default_start_season_is_single_season(self):
+        # Matches the pre-multi-season behavior when --start-season isn't given.
+        args = SimpleNamespace(season=2025, week=17, start_season=2025, lookback=20, train_window=100,
+                               iterations=100, jobs=8, epochs=100, seed=1337, prep_jobs=1,
+                               weather_file=None, plan=True, output=None)
+        with patch('backtester.pd.read_parquet', return_value=self._schedule()), \
+             patch('backtester.Path.exists', return_value=True):
+            config = two_sided_season(args)
+        self.assertEqual(config['start_season'], 2025)
+
+    def test_two_sided_requires_a_complete_window(self):
+        # 2026 wk1 is scheduled but unplayed (NaN scores) -- asking for it
+        # should fail clearly, not silently evaluate a partial season.
+        schedule = pd.concat([self._schedule(), pd.DataFrame([dict(
+            season=2026, week=1, game_type='REG', game_id='2026_1',
+            away_score=float('nan'), home_score=float('nan'))])], ignore_index=True)
+        args = SimpleNamespace(season=2026, week=1, start_season=2026, lookback=20, train_window=100,
+                               iterations=100, jobs=8, epochs=100, seed=1337, prep_jobs=1,
+                               weather_file=None, plan=True, output=None)
+        with patch('backtester.pd.read_parquet', return_value=schedule), \
+             patch('backtester.Path.exists', return_value=True):
+            with self.assertRaises(ValueError):
+                two_sided_season(args)
 
     def test_cutoffs_do_not_change_with_validation_outcomes(self):
         rows = []
