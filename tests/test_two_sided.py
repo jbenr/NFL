@@ -49,6 +49,24 @@ class TwoSidedTests(unittest.TestCase):
         for a, b in zip(first[1:], second[1:]):
             np.testing.assert_array_equal(a, b)
 
+    def test_incomplete_prior_game_is_excluded_not_fatal(self):
+        # "Prior" is a week/season boundary, not a completion check --
+        # generating this week's packet before last week's Monday-night
+        # game finished used to crash the whole run on one still-NaN score.
+        data = fixture()
+        complete = dc.prepare_two_sided(data, 2026, 1)
+        data.loc[3, 'away_score'] = np.nan
+        target, x, y, xp, offset = dc.prepare_two_sided(data, 2026, 1)
+        self.assertTrue(np.isfinite(y).all())
+        self.assertEqual(len(y), len(complete[2]) - 2)  # that one game's away+home rows both dropped
+        self.assertEqual(len(x), len(complete[1]) - 2)
+
+    def test_all_prior_games_incomplete_still_raises(self):
+        data = fixture()
+        data.loc[data.season == 2025, 'away_score'] = np.nan
+        with self.assertRaises(ValueError):
+            dc.prepare_two_sided(data, 2026, 1)
+
     def test_weather_requires_coverage_and_overrides_indoor(self):
         data = fixture().drop(columns=dc.HISTORICAL_WEATHER + ['weather_indoor'])
         data.loc[0, 'roof'] = 'closed'

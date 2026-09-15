@@ -166,7 +166,8 @@ STYLE += '''
    display (team-label, matchup-head's "NE offense" side labels) -- not on
    dense data-table headers/numbers, which stay legible in a plain font. */
 .packet h1,.packet h2,.packet h3,.team-label,.matchup-head .side,.pkgtab-label{font-family:Graduate,Georgia,serif}
-.packet h1{letter-spacing:.04em;font-weight:400}.report-date{color:#aaa;margin:4px 0 18px;font-size:13px}
+.packet h1{letter-spacing:.04em;font-weight:400}
+.report-date{color:#aaa;margin:4px 0 18px;font-size:13px;font-family:Graduate,Georgia,serif}
 .copy-picks{margin:0 0 14px;display:flex;align-items:center;gap:10px}
 .copy-btn{font:12px Arial,sans-serif;background:#1a1d21;color:#e3e6e9;border:1px solid #41464e;border-radius:4px;padding:6px 14px;cursor:pointer}
 .copy-btn:hover{background:#23272c}
@@ -987,7 +988,7 @@ def headline_table(folder, light=False):
     from the away team's own perspective (negative = away favored), same
     convention as the per-game card's header. Built from whichever
     {market}_details.csv this folder already has (each
-    write_packets(..., market=...) call saves its own). 'Calls' is a real
+    write_packets(..., market=...) call saves its own). 'Picks' is a real
     qualify/pass call from HIGH_CONFIDENCE_CUTOFFS, not "always show a
     lean" -- most games should say PASS, unhighlighted.
 
@@ -1101,8 +1102,8 @@ def headline_table(folder, light=False):
                  'away_logo': lambda x: logo(x), 'home_logo': lambda x: logo(x),
                  'away_team': team_cell, 'home_team': team_cell,
              })
-             .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'SD', 'Calls',
-                             'O/U', 'Model', 'Diff', 'SD', 'Calls'], axis=1)
+             .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'SD', 'Picks',
+                             'O/U', 'Model', 'Diff', 'SD', 'Picks'], axis=1)
              .map(highlight_picks, subset=['away_team', 'home_team', 'pick', 'total_pick']))
     return styled.to_html()
 

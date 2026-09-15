@@ -283,13 +283,29 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     ... --week ... --mode live) for the target week if it hasn't been played
     yet and so has no historical/reanalysis weather -- see
     data_crunchski_3.attach_historical_weather. Defaults to
-    data/weather/forecasts.parquet if that file exists, else omitted (a
-    missing-weather error for an unplayed week then means: go run
-    pull_weather.py for it first)."""
+    data/weather/forecasts.parquet if that file exists, else omitted. If
+    games are still missing weather (no forecast pulled yet, or a stale one
+    that doesn't cover this week), this pulls a live forecast for the
+    target week itself instead of failing outright -- see the ValueError
+    handler below. Also refreshes data/sched.parquet and the affected
+    data/pbp/pbp_{season}.parquet (same as main.py --refresh) if any prior
+    (already-should-be-final) week is missing scores in the cached
+    schedule -- that's staleness, not a game still in progress, and
+    training on it silently would mean skipping real recent games."""
     from types import SimpleNamespace
     import data_crunchski_3 as dc3
     from backtester import KEY, build_panel, history_weeks, market_panel, settle
     from weekly_packet import write_packets
+    sched = pd.read_parquet('data/sched.parquet')
+    prior = (sched.season < season) | ((sched.season == season) & (sched.week < week))
+    stale = sched.loc[prior & sched.away_score.isna()]
+    if not stale.empty:
+        stale_seasons = sorted(stale.season.unique().tolist())
+        print(f'{len(stale)} prior game(s) in data/sched.parquet missing a score (season(s) {stale_seasons}) -- '
+             'this should already be final, so refreshing schedule + play-by-play before continuing...', flush=True)
+        import data_pullson
+        data_pullson.pull_sched(stale_seasons)
+        data_pullson.pull_pbp(stale_seasons)
     weather_file = Path(weather_file or 'data/weather/historical_features.parquet')
     if not weather_file.exists():
         raise ValueError(f'Missing historical weather: {weather_file}')
@@ -298,7 +314,27 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         forecast_file = default_forecast if default_forecast.exists() else None
     span = history_weeks(SimpleNamespace(start_season=season, season=season, week=week))
     panel = build_panel(season, week, span + train_window - 20, lookback, 'steep', use_scaling=False)
-    panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+    try:
+        panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+    except ValueError as error:
+        if 'Historical weather missing' not in str(error):
+            raise
+        # Training-window games always have real reanalysis (see
+        # attach_historical_weather's docstring) -- this only ever fires
+        # for the target week itself, i.e. it hasn't been played yet and
+        # has no forecast pulled (or a stale one) covering it. Pull one now
+        # instead of making that a manual "go run pull_weather.py first" step.
+        print(f'{error}\nPulling a live weather forecast for {season} wk{week} to fill the gap...', flush=True)
+        import pull_weather
+        forecast_file = Path(forecast_file or 'data/weather/forecasts.parquet')
+        try:
+            games = pull_weather.scheduled_games(season, week, 'live', decision_hours=24)
+            pull_args = SimpleNamespace(mode='live', decision_hours=24, publication_hours=8,
+                                        output=str(forecast_file), cache_dir='data/cache/open_meteo', refresh=False)
+            pull_weather.pull(games, pull_args)
+        except Exception as pull_error:
+            raise ValueError(f'{error} (auto-pull also failed: {pull_error})') from pull_error
+        panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
     target_rows = panel[(panel.season == season) & (panel.week == week)]
     if target_rows.empty:
         raise ValueError(f'{season} wk{week}: not present in the prepared panel')

@@ -585,7 +585,7 @@ def local_weather(latitude=None, longitude=None, city=None):
                'snowfall': 'Snow in', 'cloud_cover': 'Cloud %',
                'wind_speed_10m': 'Wind mph', 'wind_gusts_10m': 'Gust mph'}
     table = frame.reindex(columns=columns).rename(columns=columns)
-    print(f'Next 72 hours | Eastern Time (ET) | {MODEL}')
+    print('Next 72 hours | Eastern Time (ET)')
     hours = valid.loc[upcoming].dt.tz_convert('America/New_York').dt.hour
     print(weather_table(table, hours))
     print('Hourly model forecast, not a measurement at your exact spot. No NFL files changed.')

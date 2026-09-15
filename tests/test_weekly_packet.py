@@ -54,6 +54,8 @@ class HeadlineTableTests(unittest.TestCase):
             self.assertIn('#ffe590', html)
             rule = html.split('background-color: #ffe590')[0].rsplit('{', 1)[0]
             self.assertGreaterEqual(rule.count('#T_'), 2)
+            self.assertIn('>Picks</th>', html)
+            self.assertNotIn('>Calls</th>', html)
 
     @patch.object(wp, 'logo', return_value='')
     @patch.object(wp, 'packet_schedule', return_value=pd.DataFrame(dict(

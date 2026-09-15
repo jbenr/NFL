@@ -81,6 +81,17 @@ def prepare_two_sided(panel, season, week):
     target = panel.loc[(panel.season == season) & (panel.week == week)].copy()
     if train.empty or target.empty:
         raise ValueError('Need earlier training games and a target week')
+    # "Prior" is a week/season boundary, not a completion check -- e.g.
+    # generating this week's packet before last week's Monday-night game
+    # has finished means that one row still has no final score. Drop it
+    # from training rather than failing the whole run over one game.
+    incomplete = train.away_score.isna() | train.home_score.isna()
+    if incomplete.any():
+        print(f'{int(incomplete.sum())} prior game(s) missing a final score -- excluding from training: '
+             f'{", ".join(train.loc[incomplete, "game_id"])}', flush=True)
+        train = train.loc[~incomplete].copy()
+        if train.empty:
+            raise ValueError('Need earlier training games and a target week')
     x, xp = two_sided_rows(train), two_sided_rows(target)
     features = [c for c in x if c not in BASE_CONTEXT]
     x = x.replace([np.inf, -np.inf], np.nan)
