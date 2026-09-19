@@ -270,22 +270,28 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .stats-view{display:none}
 #stats-mode-raw:checked~#stats-view-raw{display:block}
 #stats-mode-model:checked~#stats-view-model{display:block}
-.venue-label{display:block;color:#8e99a5;font:10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
 .banner-team .team-copy{display:flex;flex-direction:column}.banner-qb{font:11px/1.4 Arial,sans-serif;color:#aaa;white-space:normal;margin-top:4px}
 .packet .pill.pick{background:#ffe590;color:#222}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}
 .pick-header{overflow-x:auto;border-bottom:1px solid #333;padding:10px 0 16px;margin-bottom:12px}
 .pick-grid{display:grid;grid-template-columns:160px repeat(5,minmax(60px,1fr)) 160px;min-width:700px;align-items:center;gap:6px 8px;text-align:center;font-variant-numeric:tabular-nums}
 .pick-label{font:10px Arial,sans-serif;color:#9ba8b5}.pick-label:first-child,.pick-qb{text-align:left}.pick-label:nth-child(7),.pick-qb.home{text-align:right}
 .pick-team{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font:24px Graduate,serif}.pick-team.home{justify-content:flex-end}.pick-team .logo{width:52px;height:52px}
-.pick-team .venue-label{flex:0 0 100%;margin-bottom:0}.pick-team.home .venue-label{text-align:right}
 .pick-value{font-size:15px;font-weight:600}.pick-qb{font:11px Arial,sans-serif;white-space:nowrap}.pick-score{grid-column:2/7;font:11px Arial,sans-serif;color:#c8cdd3}
 summary.matchup-summary{padding-left:0}summary.matchup-summary:before{left:-12px}
 .site-row{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter);gap:var(--row-gap);align-items:center;margin:12px 0;font-size:11px}
 .site-label{white-space:nowrap}.site-label strong{margin-right:8px}.site-row .context-value{font-size:11px}
-/* weather_line: one row of whole segments (flex items) split by thin
+.site-row .context-value{text-align:right}
+/* Weather: a heading, then one tight row per model input (matchup_attribution). */
+.context-group{font-size:11px;font-weight:700;margin:14px 0 2px}
+.site-row.weather-factor{margin:5px 0}.weather-factor .site-label{padding-left:12px;color:#ccc}
+/* Closing line: baseline + every contribution + residual = the header's number. */
+.contrib-sum{border-top:1px solid #292d32;margin-top:14px;padding-top:9px;font:12px/1.5 Arial,sans-serif;color:#b7c0c9}
+.contrib-sum strong{color:#fff}
+/* weather_line (last row of the game header, styled like the QB/prediction
+   row above it): one row of whole segments (flex items) split by thin
    dividers; on a narrow screen segments wrap as units instead, so the
    dividers drop out rather than dangling at the start of a line. */
-.weather-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 0;margin:-2px 0 12px;font:12px/1.45 Arial,sans-serif;color:#b7c0c9}
+.weather-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 0;margin:10px 0 0;font:11px/1.45 Arial,sans-serif;color:#c8cdd3}
 .weather-line span+span::before{content:'';display:inline-block;width:1px;height:10px;background:#41464e;margin:0 10px}
 @media(max-width:650px){.packet{--gutter:130px;--val-w:55px;--row-gap:5px}.stat-line{grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter)}.matchup-head{grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter)}.site-label{white-space:normal}.weather-line{gap:2px 14px}.weather-line span+span::before{display:none}}
 @media(max-width:650px){.packet-bundle{padding:10px}.packet-bundle .pkgtab-label{padding:8px;font-size:12px}.headline-table img{height:26px;width:28px}}
@@ -523,31 +529,24 @@ def context_cells(feature, row):
         detail = f'Avg {average:.1f} · n={int(count)}' if pd.notna(average) and pd.notna(count) else ''
         return 'Referee', name, detail
     if feature == 'home_field_adv':
-        # Stadium/roof/surface are in weather_line above the chart. 'location'
-        # is a Home/Neutral site-type flag, not a city -- a neutral site is
-        # the one thing worth repeating next to the home-field bar itself.
+        # Stadium on the right of the bar. 'location' is a Home/Neutral
+        # site-type flag, not a city -- only worth adding for a neutral site.
+        venue = str(game.get('stadium')) if pd.notna(game.get('stadium')) else ''
         neutral = str(game.get('location', '')).lower() == 'neutral'
-        return label, '', 'Neutral site' if neutral else ''
+        return label, '', ' · '.join(p for p in [venue, 'neutral site' if neutral else ''] if p)
     away, home = game.get('away_rest'), game.get('home_rest')
     if pd.isna(away) or pd.isna(home):
         return label, '', ''
-    return f'Rest (Δ {away-home:+g}d)', f'{row.away_team} {away:g}d', f'{row.home_team} {home:g}d'
+    return 'Rest', f'{row.away_team} {away:g}d', f'{row.home_team} {home:g}d'
 
 
 def matchup_attribution(row, stats, panel, shared=False, differential=False):
     direction = 1 if row.get('market') == 'total' else -1
+    # One entry per model feature, never combined or dropped for display:
+    # offense/defense metrics go in the two expandable matchup bars, every
+    # other feature gets its own row below them, and the closing line shows
+    # baseline + all of them + residual landing exactly on the prediction.
     values = {c[5:]: float(row[c]) for c in row.index if c.startswith('attr_') and pd.notna(row[c])}
-    # Display-only grouping; model inputs, CSV components, and importance stay separate.
-    home_keys = ['home_field_adv', 'context_stadium', 'context_field']
-    if any(key in values for key in home_keys):
-        home_total = sum(values.pop(key, 0) for key in home_keys)
-        values['home_field_adv'] = home_total
-    # two_sided_packet's 7 separate weather dimensions -> one combined
-    # "Weather" bar (context_cells has a dedicated, richer display for this
-    # exact key), same grouping trick as home_field_adv above.
-    weather_keys = [f for f in values if f.startswith('context_weather_')]
-    if weather_keys:
-        values['context_weather'] = sum(values.pop(k) for k in weather_keys)
     scale = max([abs(v) for v in values.values()] + [.01])
     net_scale = max([abs(sum(v for f, v in values.items() if f.startswith(prefix)))
                      for prefix in ['away_off_', 'away_def_']] + [.01])
@@ -590,13 +589,12 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
                         f'<div class="net-bar" aria-label="Net matchup contribution">{point_bar(direction * net, net_scale, row)}</div>'
                         f'<div class="side">{escape(row.home_team)} {right_label}{logo(row.home_team)}</div></div></summary>{"".join(rows)}</details>')
     other = []
-    context_order = ['home_field_adv', 'context_weather', 'away_rest_adv', 'context_referee']
-    context_features = sorted((f for f in values if f not in used),
-                              key=lambda f: context_order.index(f) if f in context_order else len(context_order))
+    context_order = ['home_field_adv', 'context_stadium', 'context_field', 'away_rest_adv', 'context_referee',
+                     'context_importance', 'context_weather']
+    context_features = sorted((f for f in values if f not in used and not f.startswith('context_weather_')),
+                              key=lambda f: (context_order.index(f) if f in context_order else len(context_order), f))
     for feature in context_features:
         value = values[feature]
-        if feature == 'context_weather' and row.get('market') == 'spread':
-            continue  # Keep attribution in reconciliation/notes, not a spread bar.
         label, left, right = map(escape, context_cells(feature, row))
         if feature == 'home_field_adv':
             other.append(f'<div class="site-row"><div class="site-label"><strong>{label}</strong>{left}</div>'
@@ -605,8 +603,31 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
         other.append(f'<div class="stat-line context-row"><div class="stat-name">{label}</div>'
                      f'<div class="context-value">{left}</div>{point_bar(value, scale, row)}'
                      f'<div class="context-value">{right}</div></div>')
+    # two_sided_packet's weather inputs, one row each under a small heading.
+    # The readings themselves are in weather_line above the chart.
+    weather_order = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches', 'snowfall_inches',
+                     'snow_depth_inches', 'indoor']
+    weather = sorted((f for f in values if f.startswith('context_weather_') and f not in used),
+                     key=lambda f: (weather_order.index(f[16:]) if f[16:] in weather_order else len(weather_order), f))
+    if weather:
+        other.append('<div class="context-group">Weather</div>' + ''.join(
+            f'<div class="site-row weather-factor"><div class="site-label">{escape(re.sub(r" [(].*[)]$", "", pretty(f)))}</div>'
+            f'{point_bar(values[f], scale, row)}<div class="context-value"></div></div>' for f in weather))
     total = sum(values.values())
     residual = row.prediction - row.baseline - total
+    # Reconciliation in the same terms as the header and the bars (spread
+    # from the away team's line, total in points). Parts are rounded first
+    # and the residual absorbs the rounding, so the printed sum is exact.
+    shown = lambda x: round(direction * x, 2) + 0.0  # + 0.0 turns -0.0 into 0.0
+    model, base, parts = shown(row.prediction), shown(row.baseline), shown(total)
+    rest = round(model - base - parts, 2) + 0.0
+    off_count, def_count = (sum(f.startswith(p) for f in used) for p in ['away_off_', 'away_def_'])
+    target = 'ModelLine' if direction == -1 else 'Model O/U'
+    number = (lambda x: f'{x:+.2f}') if direction == -1 else (lambda x: f'{x:.2f}')
+    other.append(f'<div class="contrib-sum"><strong>{target} {number(model)}</strong> = baseline {number(base)}'
+                 f' + {len(values)} feature contributions {parts:+.2f}'
+                 f' <span class="muted">({off_count} offense and {def_count} defense in the bars above, '
+                 f'{len(values) - off_count - def_count} listed here)</span> + residual {rest:+.2f}</div>')
     input_note = ('The shared model uses raw role-specific inputs with training-only standardization. Each displayed metric sums offense and opposing-defense effects. '
                   if shared else 'Display rates are separate from the model’s recency-weighted, league-ranked inputs. ')
     if differential:
@@ -623,8 +644,7 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
         f'{input_note}'
         f'{sign_note}'
         f'Section nets sum feature contributions, not predicted team scores. Net bars share a scale with each other; feature bars share their own scale. Display rounding can affect visible sums; calculations retain full precision. '
-        f'The Home field row combines home-site, stadium and field contributions for display only. Referee average totals are shrunk toward the earlier league mean with 20 prior games of weight; same-week and future results are excluded. '
-        f'Weather contribution: {direction * values.get("context_weather", 0):+.2f} points (included in the model). '
+        f'Every model feature is shown separately; none are combined or left out. Referee average totals are shrunk toward the earlier league mean with 20 prior games of weight; same-week and future results are excluded. '
         f'Contributions explain the fitted prediction, not causal effects. Numerical residual {direction * residual:+.4f} points.</details>')
 
 
@@ -925,16 +945,16 @@ def game_header(row, market, action):
         if row.get('scores_implied', False) == True:
             scores = scores.replace('Prediction:', 'Implied score:')
     return ('<header class="pick-header"><div class="pick-grid">' + labels
-            + f'<div class="pick-team"><span class="venue-label">Away</span>{logo(row.away_team)}{away}</div>'
+            + f'<div class="pick-team">{logo(row.away_team)}{away}</div>'
             + ''.join(f'<div class="pick-value">{v}</div>' for v in values)
             + f'<div class="pick-value">{pick}</div>'
-            + f'<div class="pick-team home"><span class="venue-label">Home</span>{home}{logo(row.home_team)}</div>'
+            + f'<div class="pick-team home">{home}{logo(row.home_team)}</div>'
             + f'<div class="pick-qb">{qb("away")}</div><div class="pick-score">{scores}</div>'
-            + f'<div class="pick-qb home">{qb("home")}</div></div></header>')
+            + f'<div class="pick-qb home">{qb("home")}</div></div>{weather_line(row)}</header>')
 
 
 def weather_line(row):
-    """One compact line under the game header: when, where, and the
+    """The game header's last row, one compact line: when, where, and the
     game-time weather the model used -- "Thu Sep 17 · 8:15 PM ET | Highmark
     Stadium · Grass | 67°F (feels 72°F) | Wind 4.6 mph | Precip 0.00 in".
     Segments wrap as whole pieces on narrow screens (see .weather-line).
@@ -1390,7 +1410,7 @@ def write_packets(predictions, panel, importance, config, root):
             # page-wide, not per-game) -- said once, generically, in the
             # footer instead (below) rather than repeated per matchup.
             chart = re.sub(r'<details><summary>Calculation notes</summary>.*?</details>', '', chart, flags=re.DOTALL)
-            cards.append(f'<section class="card">{game_header(row, market, action)}{weather_line(row)}{chart}</section>')
+            cards.append(f'<section class="card">{game_header(row, market, action)}{chart}</section>')
         # Same boilerplate that used to repeat inside every game's
         # "Calculation notes"/"Pick details" dropdowns -- said once, always
         # visible (no dropdown), generically (home/away team names dropped
