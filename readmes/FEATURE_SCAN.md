@@ -100,7 +100,7 @@ CSV retains full precision. Importance is a training-sample diagnostic, not vali
 No production rules/highlights are inherited. Scores are continuous regression outputs,
 not probabilities or guaranteed nonnegative score distributions.
 
-Output: `data/results/2026_1_20/packet_shared/2026_01/`. Cached reruns do not train.
+Output: `data/results/packet_shared/2026_1_20/packet_26w1.html`. Cached reruns do not train.
 Production, symmetric packets, and the original headline table are not overwritten.
 
 ## Symmetric matchup experiment

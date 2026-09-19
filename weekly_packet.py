@@ -1299,8 +1299,12 @@ def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
     (shared=True) no longer keeps those around (only packet.html + config.json,
     to avoid cluttering data/results/), so this has nothing to refresh for a
     two-sided packet produced since that change; refit it again instead."""
-    root = Path(f'data/results/{season}_{week}_{lookback}/{"packet_shared" if shared else "packet_symmetric" if symmetric else "packet"}')
-    folder = root / f'{season}_{week:02d}'
+    if shared:
+        root = Path(f'data/results/packet_shared/{season}_{week}_{lookback}')
+        folder = root
+    else:
+        root = Path(f'data/results/{season}_{week}_{lookback}/{"packet_symmetric" if symmetric else "packet"}')
+        folder = root / f'{season}_{week:02d}'
     refreshed = False
     for market in ['spread', 'total']:
         details = folder / f'{market}_details.csv'
@@ -1326,7 +1330,7 @@ def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Build a weekly packet by fitting the chosen model '
-                                     '-- writes to data/results/{season}_{week}_{lookback}/packet_shared/.')
+                                     '-- writes to data/results/packet_shared/{season}_{week}_{lookback}/.')
     parser.add_argument('--model', choices=['two-sided', 'neural'], default='two-sided',
                         help="'two-sided': league z-scores, symmetric usage scaling, historical weather "
                              "(backtester.py --model two-sided's model). 'neural': the original single-network "

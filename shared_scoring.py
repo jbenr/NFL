@@ -270,11 +270,11 @@ def market_details(details, market):
 
 
 def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100, epochs=100,
-                     seed=1337, jobs=None, weather_file=None, forecast_file=None):
+                     seed=1337, jobs=None, weather_file=None, forecast_file=None, calc='weighted'):
     """Single-week two-sided packet -- same model/inputs as backtester.py's
     --model two-sided (league z-scores, symmetric usage scaling, historical
     weather), but one target week instead of a season-long backtest, written
-    to data/results/{season}_{week}_{lookback}/packet_shared/ via
+    to data/results/packet_shared/{season}_{week}_{lookback}/packet_{yy}w{week}.html via
     weekly_packet.write_packets. This is the ongoing production path for
     that packet; fit_panel/preview (the older percentile-diff
     representation) are retired.
@@ -313,7 +313,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         default_forecast = Path('data/weather/forecasts.parquet')
         forecast_file = default_forecast if default_forecast.exists() else None
     span = history_weeks(SimpleNamespace(start_season=season, season=season, week=week))
-    panel = build_panel(season, week, span + train_window - 20, lookback, 'steep', use_scaling=False)
+    panel = build_panel(season, week, span + train_window - 20, lookback, calc, use_scaling=False)
     try:
         panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
     except ValueError as error:
@@ -369,7 +369,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     # saved packet without refitting -- the *_details.csv/*_importance.csv
     # it needs for that no longer get kept on disk. That's an accepted
     # tradeoff for not cluttering data/results/, not an oversight.
-    final_folder = Path(f'data/results/{season}_{week}_{lookback}/packet_shared') / f'{season}_{week:02d}'
+    final_folder = Path(f'data/results/packet_shared/{season}_{week}_{lookback}')
     with tempfile.TemporaryDirectory() as scratch:
         scratch_output = Path(scratch)
         for market in ['spread', 'total']:
@@ -387,7 +387,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         # ones). final_folder is exclusively owned by this function.
         shutil.rmtree(final_folder, ignore_errors=True)
         final_folder.mkdir(parents=True, exist_ok=True)
-        final_path = final_folder / 'packet.html'
+        final_path = final_folder / f'packet_{season % 100:02d}w{week}.html'
         shutil.move(str(bundled), str(final_path))
         for market in ['spread', 'total']:
             saved_config = scratch_folder / f'{market}_config.json'
