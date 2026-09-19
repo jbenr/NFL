@@ -282,9 +282,12 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 summary.matchup-summary{padding-left:0}summary.matchup-summary:before{left:-12px}
 .site-row{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter);gap:var(--row-gap);align-items:center;margin:12px 0;font-size:11px}
 .site-label{white-space:nowrap}.site-label strong{margin-right:8px}.site-row .context-value{font-size:11px}
-.weather-section{border-top:1px solid #292d32;margin-top:16px;padding-top:10px}.weather-section h3{font:12px Arial,sans-serif;color:#b7c0c9;margin:0 0 10px}
-.weather-section dl{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:0}.weather-section dt{font:10px Arial,sans-serif;color:#929da9}.weather-section dd{font:12px Arial,sans-serif;margin:4px 0 0}
-@media(max-width:650px){.packet{--gutter:130px;--val-w:55px;--row-gap:5px}.stat-line{grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter)}.matchup-head{grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter)}.site-label{white-space:normal}.weather-section dl{grid-template-columns:repeat(2,1fr)}}
+/* weather_line: one row of whole segments (flex items) split by thin
+   dividers; on a narrow screen segments wrap as units instead, so the
+   dividers drop out rather than dangling at the start of a line. */
+.weather-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 0;margin:-2px 0 12px;font:12px/1.45 Arial,sans-serif;color:#b7c0c9}
+.weather-line span+span::before{content:'';display:inline-block;width:1px;height:10px;background:#41464e;margin:0 10px}
+@media(max-width:650px){.packet{--gutter:130px;--val-w:55px;--row-gap:5px}.stat-line{grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter)}.matchup-head{grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter)}.site-label{white-space:normal}.weather-line{gap:2px 14px}.weather-line span+span::before{display:none}}
 @media(max-width:650px){.packet-bundle{padding:10px}.packet-bundle .pkgtab-label{padding:8px;font-size:12px}.headline-table img{height:26px;width:28px}}
 @media print{main.pkgpanel{display:block!important}.pkgtab-label,.pkgtab-radio{display:none!important}}
 '''
@@ -482,6 +485,22 @@ def packet_schedule():
         {'away_team': dc.RELOCATED_TEAMS, 'home_team': dc.RELOCATED_TEAMS})
 
 
+# data/sched.parquet's surface codes, as they're written on the page.
+SURFACES = {'grass': 'Grass', 'fieldturf': 'FieldTurf', 'matrixturf': 'MatrixTurf', 'sportturf': 'SportTurf',
+            'astroturf': 'AstroTurf', 'a_turf': 'A-Turf'}
+
+
+def schedule_game(row):
+    """This game's data/sched.parquet row (stadium, roof, surface, rest,
+    referee...), or None if it isn't there."""
+    if 'season' not in row:
+        return None
+    sched = packet_schedule()
+    match = sched[(sched.season == row.season) & (sched.week == row.week) &
+                  (sched.away_team == row.away_team) & (sched.home_team == row.home_team)]
+    return None if match.empty else match.iloc[0]
+
+
 def context_cells(feature, row):
     label = pretty(feature)
     if feature == 'context_importance':
@@ -489,26 +508,14 @@ def context_cells(feature, row):
                  for side in ['away', 'home']]
         return 'Playoff leverage' if 'importance_method' in row else 'Game importance', cells[0], cells[1]
     if feature == 'context_weather':
-        # two_sided_packet's raw weather columns (unprefixed -- feels_like_f/
-        # wind_mph/rain_inches/snowfall_inches), not the older
-        # weather_temperature_f/weather_wind_mph this used to read.
-        indoor = str(row.get('roof', '')).lower() in ('dome', 'closed')
-        if indoor:
-            return 'Weather', 'Indoors', 'Climate-controlled'
-        temp, wind = row.get('feels_like_f'), row.get('wind_mph')
-        left = f'{temp:.0f}°F, wind {wind:.0f} mph' if pd.notna(temp) and pd.notna(wind) else '—'
-        rain, snow = row.get('rain_inches') or 0, row.get('snowfall_inches') or 0
-        precip = ' + '.join(p for p, v in [('rain', rain), ('snow', snow)] if v > .01)
-        right = f'{precip} expected' if precip else 'No precipitation'
-        return 'Weather', left, right
-    if feature not in ['away_rest_adv', 'home_field_adv', 'context_referee'] or 'season' not in row:
+        # Just the bar: the readings behind it are in weather_line, directly
+        # above this chart, rather than repeated here.
+        return 'Weather', '', ''
+    if feature not in ['away_rest_adv', 'home_field_adv', 'context_referee']:
         return label, '', ''
-    sched = packet_schedule()
-    match = sched[(sched.season == row.season) & (sched.week == row.week) &
-                  (sched.away_team == row.away_team) & (sched.home_team == row.home_team)]
-    if match.empty:
+    game = schedule_game(row)
+    if game is None:
         return label, '', ''
-    game = match.iloc[0]
     if feature == 'context_referee':
         name = game.get('referee')
         name = str(name) if pd.notna(name) else 'Unassigned'
@@ -516,12 +523,11 @@ def context_cells(feature, row):
         detail = f'Avg {average:.1f} · n={int(count)}' if pd.notna(average) and pd.notna(count) else ''
         return 'Referee', name, detail
     if feature == 'home_field_adv':
-        venue = game.get('stadium')
-        # 'location' is a Home/Neutral site-type flag, not a city -- only
-        # worth showing in the unusual case (a neutral-site/international game).
+        # Stadium/roof/surface are in weather_line above the chart. 'location'
+        # is a Home/Neutral site-type flag, not a city -- a neutral site is
+        # the one thing worth repeating next to the home-field bar itself.
         neutral = str(game.get('location', '')).lower() == 'neutral'
-        site = ' · '.join(str(v) for v in [('Neutral site' if neutral else None), game.get('roof'), game.get('surface')] if pd.notna(v))
-        return label, str(venue) if pd.notna(venue) else '—', site
+        return label, '', 'Neutral site' if neutral else ''
     away, home = game.get('away_rest'), game.get('home_rest')
     if pd.isna(away) or pd.isna(home):
         return label, '', ''
@@ -927,22 +933,52 @@ def game_header(row, market, action):
             + f'<div class="pick-qb home">{qb("home")}</div></div></header>')
 
 
-def weather_section(row):
-    def reading(column, unit, precision=1):
+def weather_line(row):
+    """One compact line under the game header: when, where, and the
+    game-time weather the model used -- "Thu Sep 17 · 8:15 PM ET | Highmark
+    Stadium · Grass | 67°F (feels 72°F) | Wind 4.6 mph | Precip 0.00 in".
+    Segments wrap as whole pieces on narrow screens (see .weather-line).
+    Indoor games say so instead of listing outdoor readings the model
+    overrides anyway; rain/snow only appear when there's a nonzero amount;
+    a missing reading just drops its segment."""
+    def number(column):
         value = row.get(column)
-        return f'{value:.{precision}f}{unit}' if pd.notna(value) else '—'
-    air = 'temperature_f' if pd.notna(row.get('temperature_f')) else 'temp'
+        return float(value) if pd.notna(value) else None
+
+    parts = []
     date = pd.to_datetime(row.get('gameday'), errors='coerce')
     time = pd.to_datetime(row.get('gametime'), format='%H:%M', errors='coerce')
-    fields = [('Game date', date.strftime('%a %b %d, %Y') if pd.notna(date) else '—'),
-              ('Kickoff (ET)', time.strftime('%I:%M %p').lstrip('0') if pd.notna(time) else '—'),
-              ('Air temp', reading(air, '°F')), ('Feels like', reading('feels_like_f', '°F')),
-              ('Wind', reading('wind_mph', ' mph')), ('Precipitation', reading('precip_inches', ' in', 3)),
-              ('Rain', reading('rain_inches', ' in', 3)), ('Snow', reading('snowfall_inches', ' in', 3))]
-    indoor = str(row.get('roof', '')).lower() in ['dome', 'closed']
-    note = ' · indoor model conditions' if indoor else ' · game-time inputs'
-    return '<section class="weather-section"><h3>Weather' + note + '</h3><dl>' + ''.join(
-        f'<div><dt>{label}</dt><dd>{escape(value)}</dd></div>' for label, value in fields) + '</dl></section>'
+    when = [f'{date:%a %b} {date.day}' if pd.notna(date) else None,
+            f'{time:%I:%M %p} ET'.lstrip('0') if pd.notna(time) else None]
+    if any(when):
+        parts.append(' · '.join(p for p in when if p))
+    game = schedule_game(row)
+    field = lambda name: str(game.get(name)).strip() if game is not None and pd.notna(game.get(name)) else ''
+    surface = field('surface')
+    venue = [field('stadium'), SURFACES.get(surface.lower(), surface.title()),
+             'Neutral site' if field('location').lower() == 'neutral' else '']
+    if any(venue):
+        parts.append(' · '.join(p for p in venue if p))
+    roof = str(row.get('roof') if pd.notna(row.get('roof')) else field('roof')).lower()
+    if roof in ('dome', 'closed'):
+        parts.append('Indoors (dome) · weather not a factor' if roof == 'dome' else 'Roof closed · weather not a factor')
+    else:
+        air, feels = number('temperature_f') if number('temperature_f') is not None else number('temp'), number('feels_like_f')
+        weather = []
+        if air is not None:
+            weather.append(f'{air:.0f}°F' + (f' (feels {feels:.0f}°F)' if feels is not None else ''))
+        elif feels is not None:
+            weather.append(f'Feels {feels:.0f}°F')
+        if number('wind_mph') is not None:
+            weather.append(f'Wind {number("wind_mph"):.1f} mph')
+        precip, rain, snow = number('precip_inches'), number('rain_inches'), number('snowfall_inches')
+        if precip is not None or rain is not None or snow is not None:
+            detail = [f'{kind} {amount:.2f} in' for kind, amount in [('rain', rain), ('snow', snow)] if amount and amount >= .005]
+            weather.append(f'Precip {precip or 0:.2f} in' + (f' ({", ".join(detail)})' if detail else ''))
+        if roof == 'open' and weather:
+            weather[0] = 'Roof open · ' + weather[0]
+        parts += weather or ['Weather unavailable']
+    return '<div class="weather-line">' + ''.join(f'<span>{escape(p)}</span>' for p in parts) + '</div>'
 
 
 def packet_tabs(active):
@@ -1354,7 +1390,7 @@ def write_packets(predictions, panel, importance, config, root):
             # page-wide, not per-game) -- said once, generically, in the
             # footer instead (below) rather than repeated per matchup.
             chart = re.sub(r'<details><summary>Calculation notes</summary>.*?</details>', '', chart, flags=re.DOTALL)
-            cards.append(f'<section class="card">{game_header(row, market, action)}{chart}{weather_section(row)}</section>')
+            cards.append(f'<section class="card">{game_header(row, market, action)}{weather_line(row)}{chart}</section>')
         # Same boilerplate that used to repeat inside every game's
         # "Calculation notes"/"Pick details" dropdowns -- said once, always
         # visible (no dropdown), generically (home/away team names dropped
