@@ -1293,12 +1293,69 @@ def neural_packet(season, week, lookback=20, iterations=100, seed=1337, symmetri
     return headline
 
 
+def refresh_weather(season, week, forecast_file=None):
+    """Observed weather for games played since the last pull, then a fresh
+    forecast for the target week (bypassing pull_weather's hourly live cache).
+    Best effort on purpose: two_sided_packet already falls back to a pulled
+    forecast when a game has no reanalysis row -- and pulls one itself if it
+    has to -- so a weather hiccup here should not sink the whole rerun."""
+    from types import SimpleNamespace
+    import pull_weather
+    try:
+        print(f'Refresh: topping up observed weather for {season}...', flush=True)
+        _, failures = pull_weather.pull_historical([season])
+        if not failures.empty:
+            print(failures.to_string(index=False), flush=True)
+        pull_weather.build_weather_features()
+    except Exception as error:
+        print(f'Refresh: observed-weather top-up failed ({error}); keeping the existing '
+              'data/weather/historical_features.parquet.', flush=True)
+    output = Path(forecast_file or 'data/weather/forecasts.parquet')
+    try:
+        print(f'Refresh: pulling a live forecast for {season} wk{week}...', flush=True)
+        games = pull_weather.scheduled_games(season, week, 'live', decision_hours=24)
+        pull_weather.pull(games, SimpleNamespace(mode='live', decision_hours=24, publication_hours=8,
+                                                 output=str(output), cache_dir='data/cache/open_meteo',
+                                                 refresh=True))
+    except Exception as error:
+        print(f'Refresh: no live forecast pulled for {season} wk{week} ({error}); '
+              f'using whatever {output} already holds.', flush=True)
+
+
+def refresh_inputs(season, week, shared=True, forecast_file=None):
+    """Trust nothing on disk: repull the source data and drop every derived
+    cache, so the caller's fit recomputes the whole chain (weekly features,
+    packet stats, model members) from scratch instead of reading data/cache.
+
+    Repulls the target season's schedule and play-by-play, plus any earlier
+    season still missing a score -- that is staleness, not a game in progress.
+    Earlier seasons are final, so they are not re-downloaded wholesale; call
+    data_pullson.pull_sched/pull_pbp directly for the rare backfill that needs it."""
+    import data_pullson
+    import utils
+    utils.bypass_caches()
+    print('Refresh: ignoring every cached feature, stat and model fit from before this run.', flush=True)
+    seasons = {season}
+    schedule = Path('data/sched.parquet')
+    if schedule.exists():
+        sched = pd.read_parquet(schedule)
+        prior = (sched.season < season) | ((sched.season == season) & (sched.week < week))
+        seasons |= set(sched.loc[prior & sched.away_score.isna(), 'season'].astype(int).tolist())
+    seasons = sorted(seasons)
+    print(f'Refresh: pulling schedule + play-by-play for {seasons}...', flush=True)
+    data_pullson.pull_sched(seasons)
+    data_pullson.pull_pbp(seasons)
+    if shared:
+        refresh_weather(season, week, forecast_file)
+
+
 def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
-    """Render saved forecasts only: no model fits, data pulls, or headline edits.
-    Needs {market}_details.csv/{market}_importance.csv on disk -- two_sided_packet
-    (shared=True) no longer keeps those around (only packet.html + config.json,
-    to avoid cluttering data/results/), so this has nothing to refresh for a
-    two-sided packet produced since that change; refit it again instead."""
+    """Render saved forecasts only (the --restyle path): no model fits, data
+    pulls, or headline edits. Needs {market}_details.csv/{market}_importance.csv
+    on disk -- two_sided_packet (shared=True) no longer keeps those around (only
+    packet.html + config.json, to avoid cluttering data/results/), so this has
+    nothing to restyle for a two-sided packet produced since that change; refit
+    it with --refresh instead."""
     if shared:
         root = Path(f'data/results/packet_shared/{season}_{week}_{lookback}')
         folder = root
@@ -1322,9 +1379,9 @@ def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
         write_packets(predictions, predictions, importance, config, root)
         refreshed = True
     if not refreshed:
-        raise ValueError(f'Nothing to refresh in {folder} -- no {{market}}_details.csv found. '
-                         'Rerun the model instead of --refresh.')
-    print(f'Packet refreshed: {folder / "packet.html"}')
+        raise ValueError(f'Nothing to restyle in {folder} -- no {{market}}_details.csv found. '
+                         'Refit the model with --refresh instead.')
+    print(f'Packet restyled: {folder / "packet.html"}')
 
 
 if __name__ == '__main__':
@@ -1337,7 +1394,12 @@ if __name__ == '__main__':
                              "packet (main.py --packet's model). Default: two-sided.")
     parser.add_argument('--season', type=int, required=True)
     parser.add_argument('--week', type=int, required=True)
-    parser.add_argument('--refresh', action='store_true', help='Restyle saved predictions without fitting models')
+    parser.add_argument('--refresh', action='store_true',
+                        help='Full rerun: repull schedule/play-by-play/weather, ignore every cached feature, '
+                             'stat and model fit, and refit from scratch')
+    parser.add_argument('--restyle', action='store_true',
+                        help='The opposite of --refresh: re-render saved predictions without pulling or fitting '
+                             'anything (neural packets only -- two-sided packets no longer keep the CSVs it needs)')
     parser.add_argument('--lookback', type=int, default=20)
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided only: training REG weeks')
     parser.add_argument('--iterations', type=int, default=100)
@@ -1349,11 +1411,17 @@ if __name__ == '__main__':
                         'weather yet (i.e. not played yet) -- pull it first with pull_weather.py --season ... '
                         '--week ... --mode live. Defaults to data/weather/forecasts.parquet if it exists.')
     args = parser.parse_args()
-    if args.refresh:
+    if args.restyle:
+        if args.refresh:
+            parser.error('--restyle re-renders what is already saved; --refresh refits from new data. Pick one.')
         refresh_packet(args.season, args.week, args.lookback, shared=args.model == 'two-sided')
-    elif args.model == 'two-sided':
-        from shared_scoring import two_sided_packet
-        two_sided_packet(args.season, args.week, args.lookback, args.train_window, args.iterations,
-                         args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file)
     else:
-        neural_packet(args.season, args.week, args.lookback, args.iterations, args.seed)
+        if args.refresh:
+            refresh_inputs(args.season, args.week, shared=args.model == 'two-sided',
+                           forecast_file=args.forecast_file)
+        if args.model == 'two-sided':
+            from shared_scoring import two_sided_packet
+            two_sided_packet(args.season, args.week, args.lookback, args.train_window, args.iterations,
+                             args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file)
+        else:
+            neural_packet(args.season, args.week, args.lookback, args.iterations, args.seed)
