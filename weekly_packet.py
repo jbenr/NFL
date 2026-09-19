@@ -1,5 +1,6 @@
 """Self-contained, printable weekly model packets using existing team assets."""
 import base64
+import io
 import json
 import re
 from functools import lru_cache
@@ -183,6 +184,14 @@ STYLE += '''
    target (Slack, email, a doc) shows it correctly regardless of this
    page's own dark theme. */
 .copy-source{position:absolute;left:-9999px;top:0;background:#fff;color:#111;padding:16px;font-family:Arial,sans-serif}
+/* Script-free fallback (see copy_picks_widget): the checked toggle pulls the
+   light table into view, one tap selects all of it, and the label reads
+   "Done" to put it away again. */
+.copy-toggle,.copy-close,.copy-hint{display:none}
+.copy-hint{font:12px Arial,sans-serif;color:#aeb8c3}
+.copy-toggle:checked~.copy-picks .copy-open{display:none}
+.copy-toggle:checked~.copy-picks .copy-close,.copy-toggle:checked~.copy-picks .copy-hint{display:inline}
+.copy-toggle:checked~.copy-source{position:static;width:fit-content;max-width:100%;box-sizing:border-box;overflow-x:auto;margin:0 0 14px;-webkit-user-select:all;user-select:all}
 .copy-title{font-size:18px;font-weight:700;margin-bottom:2px}
 .copy-subtitle{font-size:13px;margin-bottom:10px;color:#444;font-family:Graduate,Georgia,serif}
 .packet-bundle{align-content:flex-start;align-items:flex-start;box-sizing:border-box;padding:16px 20px}
@@ -197,9 +206,20 @@ main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
 .headline-table,.stats-table{background:#111;color:#e3e6e9;font:12px/1.25 Arial,sans-serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
 .headline-table{width:100%}
 /* Stats tables size to their own content (3-6 columns of team/value data)
-   instead of stretching full-width -- a narrow table staying narrow is
-   what lets two of them sit side by side in .stats-grid below. */
+   instead of stretching full-width. */
 .stats-table{width:auto;max-width:100%}
+/* CSS-only sorting: a <table> can't reorder its rows, a grid can. Rows and
+   sections flatten into the grid (display:contents), every cell takes its
+   row's --o as its `order`, and the headers stay on top at -1. Unsorted,
+   --o is 0 everywhere and rows show in source (alphabetical) order.
+   Column count comes from each table's inline grid-template-columns. */
+table.stats-table{display:grid;width:max-content;max-width:none}
+.stats-table thead,.stats-table tbody,.stats-table tr{display:contents}
+.stats-table td{order:var(--o,0)}.stats-table th{order:-1}
+/* Grid cells stretch instead of centering like table cells -- a 20px line
+   (the logo's height) keeps text and logos lined up in every row. */
+.packet .stats-table td{line-height:20px}.stats-table td img{vertical-align:top}
+.stats-table tbody tr:hover td{background:#1d2126}
 .packet .headline-table th{padding:7px 8px}
 .packet .headline-table td{padding:3px 8px}
 /* Every stats table formatted the same tight way (this used to be QB
@@ -215,10 +235,11 @@ main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
 .headline-table-light td:nth-child(4),.headline-table-light td:nth-child(7){font-family:Graduate,Georgia,serif;font-size:14px}
 .headline-table td:nth-child(5),.headline-table td:nth-child(6),.headline-table td:nth-child(9),.headline-table td:nth-child(10),
 .headline-table td:nth-child(12),.headline-table td:nth-child(13),.headline-table td:nth-child(14),.headline-table td:nth-child(15){text-align:right}
-.stats-table .rank{font-size:10px;color:#aab2bc;margin-left:6px}
+.stats-table .rank{font-size:10px;line-height:1;color:#aab2bc;margin-left:6px}
 .stats-table td:first-child,.stats-table th:first-child{text-align:left}
-.stats-table button{font:inherit;font-weight:600;color:inherit;background:none;border:0;padding:0;cursor:pointer}
-.stats-table th[aria-sort=ascending] button:after{content:' ↑'}.stats-table th[aria-sort=descending] button:after{content:' ↓'}
+.sort-radio{display:none}
+.stats-table th label{font-weight:600;cursor:pointer}
+.stats-table .sort-to-d{display:none}.stats-table .sort-to-d:after{content:' ↑'}
 /* width:fit-content -- otherwise this (a plain block div) stretches to
    fill its .stats-grid column, which is sized to the WIDEST table sharing
    that column (e.g. Rushing sharing QB Elo's column, Misc sharing
@@ -239,11 +260,13 @@ main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
    different ids (qb-elo-raw/qb-elo-model). */
 .stats-table-ranked td:first-child,.stats-table-ranked th:first-child{text-align:center}
 .stats-table-ranked td:nth-child(2),.stats-table-ranked th:nth-child(2){text-align:left}
-/* Two tables per row, each sized to its own content (not stretched) --
-   QB Elo+Passing, then Rushing+Misc under Offense; Defense (no QB Elo)
-   flows Passing+Rushing, then Misc alone. */
-.stats-grid{display:grid;grid-template-columns:auto auto;gap:4px 28px;align-items:start}
-@media(max-width:760px){.stats-grid{grid-template-columns:1fr}}
+/* One table per row -- Passing, then Rushing below it, then Misc -- at
+   every width, so a phone never gets two tables squeezed side by side.
+   minmax(0,1fr), not 1fr: a bare 1fr track can't shrink below its widest
+   table, which forced the whole column ~880px wide on a 390px phone and
+   clipped every table's right edge; this keeps the column at screen width
+   so a wide table scrolls inside its own .table-scroll box instead. */
+.stats-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:4px 28px;align-items:start}
 /* Raw/Model toggle -- CSS-only :checked~sibling trick, same idea as the
    packet bundle's own tabs; no JS round-trip since this is a static file. */
 .stats-mode-radio{display:none}
@@ -640,10 +663,12 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
     data/sched.parquet. weighted_stats: same shape as `stats` but computed
     with the model's own recency decay (display_stats(..., calculation=
     'steep')) instead of a flat average -- when given, adds a Raw/Model
-    toggle (CSS-only, no JS) instead of showing only the raw view."""
+    toggle (CSS-only, no JS) instead of showing only the raw view. Column
+    sorting is CSS-only too (see metric_table/sort_css)."""
     if stats.empty:
         return '<p class="muted">No pregame league snapshot available.</p>'
     names = {}
+    sort_columns = {}  # table key -> column count, filled in by metric_table
     for side in ['away', 'home']:
         for _, row in games.iterrows():
             name = row.get(f'{side}_qb_name', row.get(f'{side}_qb_short'))
@@ -661,17 +686,23 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
         # sense for a single-metric table like QB Elo -- a multi-metric
         # table has no one overall rank, each metric keeps its own inline badge.
         heads = (['Rank'] if single else []) + ['Team'] + (['Quarterback'] if quarterback_column else []) + [pretty(m) for m in metrics]
+        # Each cell's sort key rides along with it: a rank (missing = 999,
+        # sorts last) for stat columns, the text itself for Team/Quarterback.
         rows = []
         for team in ordered.team:
-            cells = []
+            cells, keys = [], []
             if single:
                 cell = stat_cell(stats, team, unit, metrics[0])
                 rank = re.search(r'\(#(\d+)\)', cell)
                 rank_number = rank.group(1) if rank else None
-                cells.append(f'<td data-sort="{rank_number or "999"}">{rank_number or "—"}</td>')
+                cells.append(f'<td>{rank_number or "—"}</td>')
+                keys.append(int(rank_number or 999))
             cells.append(f'<td class="team-label">{logo(team)} {escape(team)}</td>')
+            keys.append(team.casefold())
             if quarterback_column:
-                cells.append(f'<td>{escape(names.get(team, "—"))}</td>')
+                name = names.get(team, '—')
+                cells.append(f'<td>{escape(name)}</td>')
+                keys.append(name.casefold())
             for metric in metrics:
                 cell = stat_cell(stats, team, unit, metric)
                 rank = re.search(r'\(#(\d+)\)', cell)
@@ -679,15 +710,53 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
                     # Already broken out into its own Rank column above --
                     # no point repeating the same (#N) badge inline too.
                     cell = re.sub(r'\s*<span class="rank">.*?</span>', '', cell)
-                cells.append(f'<td data-sort="{rank.group(1) if rank else "999"}">{cell}</td>')
-            rows.append('<tr>' + ''.join(cells) + '</tr>')
+                cells.append(f'<td>{cell}</td>')
+                keys.append(int(rank.group(1)) if rank else 999)
+            rows.append((cells, keys))
+        # Sorting is pure CSS so it works where scripts don't run (phone
+        # file previews): every row carries its position under each sort
+        # (--a3 = 3rd column best-first, --d3 = reversed) and a checked
+        # radio (see sort_css below) copies one of them into the row's
+        # grid `order`. Stable sorts, so ties keep alphabetical team order.
+        positions = [[] for _ in rows]
+        for i in range(len(heads)):
+            for direction, reverse in [('a', False), ('d', True)]:
+                ranked = sorted(range(len(rows)), key=lambda r: rows[r][1][i], reverse=reverse)
+                for position, r in enumerate(ranked, 1):
+                    positions[r].append(f'--{direction}{i + 1}:{position}')
+        # Raw and Model render the same table twice (ids off-passing-raw /
+        # off-passing-model) -- they share one set of radios, keyed without
+        # the suffix, so flipping the toggle keeps whatever sort you picked.
+        key = re.sub(r'-(raw|model)$', '', table_id)
+        sort_columns[key] = len(heads)
         # Every stats table scrolls after ~10 rows instead of stretching the
         # page -- 32 teams is a lot of scrolling either way, so keep it
         # consistent across all of them, not just QB Elo.
         ranked_class = ' stats-table-ranked' if single else ''
-        table = f'<div class="table-scroll scroll-tall"><table class="stats-table{ranked_class}" id="{table_id}"><thead><tr>'
-        table += ''.join(f'<th><button type="button" onclick="sortStats(this)" title="Sort best rank first">{escape(h)}</button></th>' for h in heads)
-        return table + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>'
+        table = (f'<div class="table-scroll scroll-tall"><table class="stats-table t-{key}{ranked_class}" id="{table_id}" '
+                 f'style="grid-template-columns:repeat({len(heads)},auto)"><thead><tr>')
+        # Two labels per header, one visible at a time: tap sorts best-first,
+        # tap again reverses (the visible label swaps to the other radio).
+        table += ''.join(f'<th class="c{i}"><label for="s-{key}-{i}-a" class="sort-to-a" title="Sort best rank first">{escape(h)}</label>'
+                         f'<label for="s-{key}-{i}-d" class="sort-to-d" title="Reverse the sort">{escape(h)}</label></th>'
+                         for i, h in enumerate(heads, 1))
+        body = ''.join(f'<tr style="{";".join(order)}">' + ''.join(cells) + '</tr>' for (cells, _), order in zip(rows, positions))
+        return table + '</tr></thead><tbody>' + body + '</tbody></table></div>'
+
+    def sort_css():
+        """The radios every header label points at, plus the rules that turn
+        a checked one into a row order. They sit ahead of everything else on
+        the page because a ~ sibling selector only looks forward; display:none
+        so tapping a label doesn't jump-scroll up to its radio."""
+        radios, rules = [], []
+        for key, count in sort_columns.items():
+            for i in range(1, count + 1):
+                radios += [f'<input type="radio" name="s-{key}" id="s-{key}-{i}-{d}" class="sort-radio">' for d in 'ad']
+                up, down, table = f'#s-{key}-{i}-a:checked~*', f'#s-{key}-{i}-d:checked~*', f'.t-{key}'
+                rules += [f'{up} {table} tbody tr{{--o:var(--a{i})}}', f'{down} {table} tbody tr{{--o:var(--d{i})}}',
+                          f'{up} {table} .c{i} .sort-to-a{{display:none}}', f'{up} {table} .c{i} .sort-to-d{{display:inline}}',
+                          f'{down} {table} .c{i} .sort-to-a:after{{content:" ↓"}}']
+        return ''.join(radios) + '<style>' + ''.join(rules) + '</style>'
 
     def build_view(stats, id_suffix):
         stats = stats.drop_duplicates('team').sort_values('team')
@@ -699,10 +768,9 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
             # second copy of it to toggle.
             tables = [(group_label, metric_table(stats, unit, metrics, f'{unit}-{group_label.lower()}-{id_suffix}'))
                      for group_label, metrics in STAT_GROUPS]
-            # Two per row (Passing+Rushing, then Misc alone) -- each table
+            # Stacked one per row (Passing, Rushing, Misc) -- each table
             # sizes to its own content (see .stats-table/.stats-grid CSS),
-            # not stretched to fill the row, so a 3-column table doesn't
-            # end up as wide as a 6-column one.
+            # so a 3-column table doesn't end up as wide as a 6-column one.
             cells = ''.join(f'<div class="stats-cell"><h3>{label}</h3>{html}</div>' for label, html in tables if html)
             view += f'<h2>{section_label}</h2><div class="stats-grid">{cells}</div>'
         return view
@@ -727,37 +795,35 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
                   f'<div id="stats-view-model" class="stats-view">{build_view(weighted_stats, "model")}</div>')
     else:
         result += build_view(stats, 'raw')
-    return result + '''<script>
-function sortTable(table,i,direction){
- table.querySelectorAll('th').forEach(h=>{delete h.dataset.direction;h.removeAttribute('aria-sort')});
- const th=table.querySelectorAll('th')[i];
- th.dataset.direction=direction===1?'asc':'desc';th.setAttribute('aria-sort',direction===1?'ascending':'descending');
- const rows=Array.from(table.tBodies[0].rows);
- rows.sort((a,b)=>{const x=a.cells[i],y=b.cells[i];return direction*(x.dataset.sort!==undefined?Number(x.dataset.sort)-Number(y.dataset.sort):x.textContent.localeCompare(y.textContent))});
- rows.forEach(r=>table.tBodies[0].appendChild(r));
-}
-function sortStats(button){
- const th=button.closest('th'),table=th.closest('table'),i=th.cellIndex;
- const direction=th.dataset.direction==='asc'?-1:1;
- sortTable(table,i,direction);
- // Raw/Model are the same columns in the same order on two separate
- // tables (twin ids like qb-elo-raw/qb-elo-model) -- carry the same
- // column+direction over to whichever one you didn't click, so flipping
- // the toggle doesn't reset back to unsorted.
- let twinId=null;
- if(table.id.endsWith('-raw'))twinId=table.id.slice(0,-4)+'-model';
- else if(table.id.endsWith('-model'))twinId=table.id.slice(0,-6)+'-raw';
- const twin=twinId&&document.getElementById(twinId);
- if(twin)sortTable(twin,i,direction);
-}
-</script>'''
+    return sort_css() + result
+
+
+# Longest side of every embedded logo. The source PNGs are 500x500, but no
+# logo displays above 70px and the single-file packet embeds each one dozens
+# of times (~670 embeds a week) -- at full size that made packet_*.html ~50 MB,
+# twice Gmail's 25 MB attachment cap (pack_a_punch.py emails it); at 128px
+# it's ~12 MB, still sharp on 2x screens everywhere but the 70px banners.
+LOGO_PX = 128
+
+
+@lru_cache(maxsize=None)
+def logo_data(team):
+    """Base64 PNG of a team's logo, downscaled to LOGO_PX; None if missing."""
+    path = Path('data/logos') / f'{team}.png'
+    if not path.exists():
+        return None
+    from PIL import Image
+    image = Image.open(path).convert('RGBA')
+    image.thumbnail((LOGO_PX, LOGO_PX), Image.LANCZOS)
+    buffer = io.BytesIO()
+    image.save(buffer, 'PNG', optimize=True)
+    return base64.b64encode(buffer.getvalue()).decode()
 
 
 def logo(team):
-    path = Path('data/logos') / f'{team}.png'
-    if not path.exists():
+    encoded = logo_data(team)
+    if encoded is None:
         return ''
-    encoded = base64.b64encode(path.read_bytes()).decode()
     return f'<img class="logo" alt="{escape(team)} logo" src="data:image/png;base64,{encoded}">'
 
 
@@ -963,17 +1029,30 @@ def copy_picks_widget(season, week, light_table):
     with zero server round-trip (it's a fully static, possibly offline file).
     A "Headline table copied" confirmation fades in next to the button and
     back out over ~3s -- CSS animation, restarted via a reflow trick so it
-    still fires on a second click before the first fade finished."""
+    still fires on a second click before the first fade finished.
+
+    Where scripts don't run (phone file previews), nothing can write to the
+    clipboard -- CSS has no way to -- so the button is really a label for a
+    hidden checkbox: tapping it reveals the same light table in place, and
+    user-select:all makes one tap on it select the whole thing for the
+    phone's own Copy. When scripts do run and the copy succeeds, the click
+    is cancelled before the checkbox flips, so desktop behaves as before."""
     subtitle = escape(f'{int(season)} Week {int(week)}')
-    return ('<div class="copy-picks"><button type="button" class="copy-btn" onclick="copyPicksTable()">Copy</button>'
+    return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
+           '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksTable(event)">'
+           '<span class="copy-open">Copy</span><span class="copy-close">Done</span></label>'
+           '<span class="copy-hint">Tap the table to select it, then Copy</span>'
            '<span id="copy-feedback" class="copy-feedback">Headline table copied</span></div>'
            f'<div id="picks-copy-source" class="copy-source"><div class="copy-title">Model</div>'
            f'<div class="copy-subtitle">{subtitle}</div>{light_table}</div>'
-           '<script>function copyPicksTable(){'
+           '<script>function copyPicksTable(event){'
+           'const toggle=document.getElementById("copy-picks-toggle");if(toggle.checked)return;'
            'const source=document.getElementById("picks-copy-source");if(!source)return;'
            'const range=document.createRange();range.selectNode(source);'
            'const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);'
-           'try{document.execCommand("copy")}finally{selection.removeAllRanges()}'
+           'let copied=false;try{copied=document.execCommand("copy")}catch(error){}finally{selection.removeAllRanges()}'
+           # Copy blocked (some in-app browsers): let the checkbox reveal the table instead.
+           'if(!copied)return;event.preventDefault();'
            'const feedback=document.getElementById("copy-feedback");'
            'feedback.classList.remove("show");void feedback.offsetWidth;feedback.classList.add("show");'
            '}</script>')
