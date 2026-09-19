@@ -1,13 +1,12 @@
 """Model 2.0 -- the weekly model's name, version, results folder, and the
-spec written next to every run so a packet always says exactly which model
-made it.
+spec written at the version root so packets say exactly which model made them.
 
 Each run folder, data/results/model_2.0/{season}_{week}_{lookback}/, gets:
     packet_{yy}w{week}.html  the packet
-    model.json               this spec: version, code commit, every setting
-                             and method, and this run's training window
-and data/results/model_2.0/README.md is the same spec in plain English
-(rewritten on every run, so it always matches the latest code).
+and data/results/model_2.0/model.json gets this spec: version, code commit,
+every setting and method, and the latest run's training window. README.md is
+the same spec in plain English (rewritten on every run, so it always matches
+the latest code).
 
 The values come from the code and the run itself (feature lists, decay
 presets, cutoffs, layer sizes, training span), not from a hand-kept copy,
@@ -154,8 +153,8 @@ def readme(model):
     """The spec as plain-English Markdown."""
     lines = [f'# {model["model"]["name"]} {model["model"]["version"]}', '',
              f'Latest run: {model["run"]["season"]} week {model["run"]["week"]}, generated '
-             f'{model["model"]["generated"]}, code {model["model"]["code"]}. Every run folder has its own '
-             '`model.json` with the exact settings used for that week.', '']
+             f'{model["model"]["generated"]}, code {model["model"]["code"]}. The version-level '
+             '`model.json` in this folder is rewritten on each run with the exact current settings.', '']
 
     def section(title, value, depth=0):
         pad = '  ' * depth
@@ -185,8 +184,9 @@ def readme(model):
 
 
 def write(folder, model):
-    """model.json into the run folder; README.md into the version folder."""
+    """model.json and README.md into the version folder."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / 'model.json').write_text(json.dumps(model, indent=2, ensure_ascii=False), encoding='utf-8')
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    (RESULTS / 'model.json').write_text(json.dumps(model, indent=2, ensure_ascii=False), encoding='utf-8')
     (RESULTS / 'README.md').write_text(readme(model), encoding='utf-8')

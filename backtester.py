@@ -513,6 +513,20 @@ def two_sided_season(args):
     args.season/args.week, one continuous walk-forward -- args.start_season
     defaults to args.season itself (one season) when not given."""
     import data_crunchski_3 as dc3
+    model_version = getattr(args, 'model_version', 'legacy')
+    if model_version == 'model_2.0':
+        import model_spec
+        model_name = model_spec.ID
+        model_label = model_spec.LABEL
+        calculation = 'weighted'
+        output_root = model_spec.RESULTS.name
+    elif model_version == 'legacy':
+        model_name = 'two-sided-team-points-v1'
+        model_label = 'Two-sided team scores'
+        calculation = 'steep'
+        output_root = 'two_sided'
+    else:
+        raise ValueError(f'Unknown two-sided model version: {model_version}')
     if args.lookback < 1 or args.train_window < 1 or args.iterations < 2 or args.jobs < 1 or args.epochs < 1:
         raise ValueError('Lookback, training window, workers and epochs must be positive; members >= 2')
     weather_file = Path(args.weather_file or 'data/weather/historical_features.parquet')
@@ -524,8 +538,9 @@ def two_sided_season(args):
     if scheduled.empty or scheduled[['away_score', 'home_score']].isna().any().any():
         raise ValueError('Need a completed season/window for this retrospective run')
     end_week = int(scheduled[scheduled.season == args.season].week.max())
-    config = dict(model='two-sided-team-points-v1', start_season=args.start_season, season=args.season, end_week=end_week,
-                  lookback=args.lookback, train_window=args.train_window, calculation='steep',
+    config = dict(model=model_name, model_version=model_version, start_season=args.start_season,
+                  season=args.season, end_week=end_week,
+                  lookback=args.lookback, train_window=args.train_window, calculation=calculation,
                   inputs='league_snapshot_zscore', usage_scaling='symmetric_post_normalization',
                   weather_source='historical_reanalysis', weather_file=str(weather_file),
                   weather_features=dc3.MODEL_WEATHER, iterations=args.iterations,
@@ -534,14 +549,14 @@ def two_sided_season(args):
     fingerprint = utils.cache_path('two_sided_runs', config, [__file__, 'data_crunchski_3.py',
         'data_crunchski_2.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py',
         'data/sched.parquet', weather_file]).stem
-    # Keep the existing single-season path name unchanged (data/bt/two_sided/{season}/...)
+    # Keep the existing legacy single-season path name unchanged (data/bt/two_sided/{season}/...)
     # so this isn't a breaking rename for the common case; multi-season runs
     # get their own {start_season}-{season} folder instead.
     season_label = str(args.season) if args.start_season == args.season else f'{args.start_season}-{args.season}'
-    output = Path(args.output or f'data/bt/two_sided/{season_label}/{fingerprint}')
+    output = Path(args.output or f'data/bt/{output_root}/{season_label}/{fingerprint}')
     span_label = f'{args.season} weeks 1–{end_week}' if args.start_season == args.season else f'{args.start_season} wk1 – {args.season} wk{end_week}'
-    print(f'Two-sided team scores: {span_label}, {len(scheduled)} games\n'
-          f'  steep / league z-scores / symmetric usage scaling / historical weather\n'
+    print(f'{model_label}: {span_label}, {len(scheduled)} games\n'
+          f'  {calculation} / league z-scores / symmetric usage scaling / historical weather\n'
           f'  feature lookback {args.lookback}; training window {args.train_window} REG weeks\n'
           f'  {args.iterations} members, {args.prep_jobs} preparation / {args.jobs} training workers; pre-season warmup included\n'
           f'  RETROSPECTIVE WEATHER EXPERIMENT — not pregame betting validation\n'
@@ -555,7 +570,7 @@ def two_sided_season(args):
     # regardless of whether they're played, so an uncapped args.week would
     # over-count the required history span.
     span = history_weeks(SimpleNamespace(start_season=args.start_season, season=args.season, week=end_week)) + max(args.train_window - 20, 0)
-    panel = build_panel(args.season, end_week, span, args.lookback, 'steep', use_scaling=False)
+    panel = build_panel(args.season, end_week, span, args.lookback, calculation, use_scaling=False)
     panel = dc3.attach_historical_weather(panel, weather_file)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
@@ -611,6 +626,8 @@ def configure_workers(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', choices=['shared', 'joint', 'two-sided'], default='shared')
+    parser.add_argument('--model-version', choices=['legacy', 'model_2.0'], default='legacy',
+                        help='Two-sided: legacy steep experiment or current Model 2.0 weighted production settings')
     parser.add_argument('--lookback', type=int, default=20, help='Two-sided experiment stat lookback')
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided experiment training REG weeks')
     parser.add_argument('--epochs', type=int, default=100)
@@ -668,6 +685,8 @@ if __name__ == '__main__':
         raise SystemExit(0)
     if args.plan:
         parser.error('--plan is currently supported for --model two-sided only')
+    if args.model_version != 'legacy':
+        parser.error('--model-version is currently supported for --model two-sided only')
     if args.start_season is None:
         args.start_season = 2024
     if args.output is None:

@@ -63,6 +63,18 @@ class BacktesterTests(unittest.TestCase):
             config = two_sided_season(args)
         self.assertEqual(config['start_season'], 2025)
 
+    def test_two_sided_model_20_plan_uses_weighted_settings(self):
+        args = SimpleNamespace(season=2025, week=17, start_season=2024, lookback=20, train_window=100,
+                               iterations=100, jobs=8, epochs=100, seed=1337, prep_jobs=1,
+                               weather_file=None, plan=True, output=None, model_version='model_2.0')
+        with patch('backtester.pd.read_parquet', return_value=self._schedule()), \
+             patch('backtester.Path.exists', return_value=True):
+            config = two_sided_season(args)
+        self.assertEqual(config['model'], 'model-2.0')
+        self.assertEqual(config['calculation'], 'weighted')
+        self.assertEqual(config['lookback'], 20)
+        self.assertEqual(config['train_window'], 100)
+
     def test_two_sided_requires_a_complete_window(self):
         # 2026 wk1 is scheduled but unplayed (NaN scores) -- asking for it
         # should fail clearly, not silently evaluate a partial season.

@@ -980,7 +980,7 @@ def weather_details(row):
 
 def specs_page(spec):
     """The Specs tab: model_spec's spec for this run, as labeled sections --
-    the same content as the run folder's model.json, readable in the packet."""
+    the same content as the version folder's model.json, readable in the packet."""
     def label(key):
         return key.replace('_', ' ').capitalize()
 
@@ -997,7 +997,7 @@ def specs_page(spec):
     model = spec['model']
     head = (f'<h1>{escape(model["name"])} {escape(model["version"])}</h1>'
             f'<p class="report-date">Code {escape(model["code"])} · generated {escape(model["generated"])} · '
-            'also saved as model.json next to this packet</p>')
+            'also saved as ../model.json for this model version</p>')
     sections = ''.join(f'<section class="card spec-card"><h2>{escape(label(key))}</h2>{render(value)}</section>'
                        for key, value in spec.items() if key != 'model')
     return head + sections

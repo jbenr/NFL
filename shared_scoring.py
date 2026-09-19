@@ -279,7 +279,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     --model two-sided (league z-scores, symmetric usage scaling, historical
     weather), but one target week instead of a season-long backtest, written
     to data/results/model_2.0/{season}_{week}_{lookback}/packet_{yy}w{week}.html via
-    weekly_packet.write_packets, with model.json (model_spec) next to it. This is the ongoing production path for
+    weekly_packet.write_packets, with model.json (model_spec) at data/results/model_2.0/. This is the ongoing production path for
     that packet; fit_panel/preview (the older percentile-diff
     representation) are retired.
 
@@ -353,7 +353,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     data = pd.concat([history[history.week_id >= regular[-train_window]], target_rows]).sort_values(KEY)
     details, importance = fit_two_sided(data, season, week, iterations, epochs, seed, jobs or min(iterations, 8))
     # Everything about this model and run, from the values actually used --
-    # shown in the packet's Specs tab and saved as model.json next to it.
+    # shown in the packet's Specs tab and saved as model.json at model_2.0/.
     training = data[(data.week_id < wid) & data.away_score.notna() & data.home_score.notna()]
     spec = model_spec.spec(
         season=season, week=week, lookback=lookback, train_window=train_window, iterations=iterations,
@@ -376,7 +376,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     # pages + CSVs on disk to cross-reference each other and to bundle into
     # one portable file (bundle_single_file, called from inside
     # write_packets) -- only packet.html and the small, prediction-free
-    # model.json (model_spec) are worth keeping afterward; the rest is built
+    # model.json (model_spec) is worth keeping afterward; the rest is built
     # in a scratch directory and discarded. NOTE: refresh_packet(shared=True) can no longer restyle a
     # saved packet without refitting -- the *_details.csv/*_importance.csv
     # it needs for that no longer get kept on disk. That's an accepted
@@ -403,7 +403,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         shutil.move(str(bundled), str(final_path))
     model_spec.write(final_folder, spec)
     print(f'Packet: {final_path}')
-    print(f'Model spec: {final_folder / "model.json"}')
+    print(f'Model spec: {model_spec.RESULTS / "model.json"}')
     return details
 
 
