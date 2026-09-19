@@ -507,6 +507,43 @@ def compare(args):
     return report
 
 
+def ensure_two_sided_weather(panel, weather_file):
+    """Top up the default two-sided historical-weather cache for panel games.
+
+    Custom --weather-file inputs are caller-owned experiments, so leave those
+    strict: if they are incomplete, attach_historical_weather will raise with
+    the missing game id.
+    """
+    default = Path('data/weather/historical_features.parquet')
+    if Path(weather_file) != default:
+        if not Path(weather_file).exists():
+            raise ValueError(f'Missing historical weather: {weather_file}')
+        return
+    if not default.exists():
+        missing_games = panel
+    else:
+        weather = pd.read_parquet(default, columns=['game_id'])
+        missing_games = panel[~panel.game_id.isin(set(weather.game_id))]
+    if missing_games.empty:
+        return
+    seasons = sorted(int(s) for s in missing_games.season.dropna().unique())
+    examples = ', '.join(missing_games.game_id.astype(str).head(5))
+    print(f'Historical weather missing for {len(missing_games)} panel game(s) '
+          f'({examples}); topping up seasons {seasons}...', flush=True)
+    import pull_weather
+    _, failures = pull_weather.pull_historical(seasons)
+    pull_weather.build_weather_features()
+    refreshed = pd.read_parquet(default, columns=['game_id'])
+    still_missing = panel[~panel.game_id.isin(set(refreshed.game_id))]
+    if still_missing.empty:
+        return
+    failed_ids = set(failures.game_id) if failures is not None and 'game_id' in failures else set()
+    bad = still_missing.game_id.astype(str).head(5).tolist()
+    reason = f' Pull failures include: {", ".join(sorted(failed_ids)[:5])}.' if failed_ids else ''
+    raise ValueError(f'Historical weather still missing for {len(still_missing)} panel game(s), '
+                     f'including {bad[0]}.{reason}')
+
+
 def two_sided_season(args):
     """Fixed retrospective experiment; no model/feature/cutoff selection.
     Evaluates every week from args.start_season's week 1 through
@@ -530,7 +567,7 @@ def two_sided_season(args):
     if args.lookback < 1 or args.train_window < 1 or args.iterations < 2 or args.jobs < 1 or args.epochs < 1:
         raise ValueError('Lookback, training window, workers and epochs must be positive; members >= 2')
     weather_file = Path(args.weather_file or 'data/weather/historical_features.parquet')
-    if not weather_file.exists():
+    if args.weather_file and not weather_file.exists():
         raise ValueError(f'Missing historical weather: {weather_file}')
     schedule = pd.read_parquet('data/sched.parquet')
     scheduled = schedule[(schedule.season >= args.start_season) &
@@ -546,21 +583,11 @@ def two_sided_season(args):
                   weather_features=dc3.MODEL_WEATHER, iterations=args.iterations,
                   epochs=args.epochs, seed=args.seed, status='RETROSPECTIVE — NOT PREGAME VALIDATION',
                   qb_decay='existing QB Elo decay unchanged')
-    fingerprint = utils.cache_path('two_sided_runs', config, [__file__, 'data_crunchski_3.py',
-        'data_crunchski_2.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py',
-        'data/sched.parquet', weather_file]).stem
     # Keep the existing legacy single-season path name unchanged (data/bt/two_sided/{season}/...)
     # so this isn't a breaking rename for the common case; multi-season runs
     # get their own {start_season}-{season} folder instead.
     season_label = str(args.season) if args.start_season == args.season else f'{args.start_season}-{args.season}'
-    output = Path(args.output or f'data/bt/{output_root}/{season_label}/{fingerprint}')
     span_label = f'{args.season} weeks 1–{end_week}' if args.start_season == args.season else f'{args.start_season} wk1 – {args.season} wk{end_week}'
-    print(f'{model_label}: {span_label}, {len(scheduled)} games\n'
-          f'  {calculation} / league z-scores / symmetric usage scaling / historical weather\n'
-          f'  feature lookback {args.lookback}; training window {args.train_window} REG weeks\n'
-          f'  {args.iterations} members, {args.prep_jobs} preparation / {args.jobs} training workers; pre-season warmup included\n'
-          f'  RETROSPECTIVE WEATHER EXPERIMENT — not pregame betting validation\n'
-          f'  Output: {output}', flush=True)
     if args.plan:
         return config
     from types import SimpleNamespace
@@ -571,6 +598,17 @@ def two_sided_season(args):
     # over-count the required history span.
     span = history_weeks(SimpleNamespace(start_season=args.start_season, season=args.season, week=end_week)) + max(args.train_window - 20, 0)
     panel = build_panel(args.season, end_week, span, args.lookback, calculation, use_scaling=False)
+    ensure_two_sided_weather(panel, weather_file)
+    fingerprint = utils.cache_path('two_sided_runs', config, [__file__, 'data_crunchski_3.py',
+        'data_crunchski_2.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py',
+        'data/sched.parquet', weather_file]).stem
+    output = Path(args.output or f'data/bt/{output_root}/{season_label}/{fingerprint}')
+    print(f'{model_label}: {span_label}, {len(scheduled)} games\n'
+          f'  {calculation} / league z-scores / symmetric usage scaling / historical weather\n'
+          f'  feature lookback {args.lookback}; training window {args.train_window} REG weeks\n'
+          f'  {args.iterations} members, {args.prep_jobs} preparation / {args.jobs} training workers; pre-season warmup included\n'
+          f'  RETROSPECTIVE WEATHER EXPERIMENT — not pregame betting validation\n'
+          f'  Output: {output}', flush=True)
     panel = dc3.attach_historical_weather(panel, weather_file)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')

@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 import pandas as pd
-from backtester import configure_workers, evaluate, history_weeks, two_sided_season
+from backtester import configure_workers, ensure_two_sided_weather, evaluate, history_weeks, two_sided_season
 
 
 class BacktesterTests(unittest.TestCase):
@@ -88,6 +88,36 @@ class BacktesterTests(unittest.TestCase):
              patch('backtester.Path.exists', return_value=True):
             with self.assertRaises(ValueError):
                 two_sided_season(args)
+
+    def test_default_two_sided_weather_is_topped_up_when_panel_missing_rows(self):
+        panel = pd.DataFrame([dict(season=2025, game_id='have'), dict(season=2025, game_id='missing')])
+        reads = [pd.DataFrame({'game_id': ['have']}), pd.DataFrame({'game_id': ['have', 'missing']})]
+        with patch('backtester.Path.exists', return_value=True), \
+             patch('backtester.pd.read_parquet', side_effect=reads) as read_parquet, \
+             patch('pull_weather.pull_historical', return_value=(pd.DataFrame(), pd.DataFrame())) as pull, \
+             patch('pull_weather.build_weather_features') as build:
+            ensure_two_sided_weather(panel, 'data/weather/historical_features.parquet')
+        pull.assert_called_once_with([2025])
+        build.assert_called_once_with()
+        self.assertEqual(read_parquet.call_count, 2)
+
+    def test_custom_two_sided_weather_file_is_not_auto_topped_up(self):
+        panel = pd.DataFrame([dict(season=2025, game_id='missing')])
+        with patch('backtester.Path.exists', return_value=True), \
+             patch('pull_weather.pull_historical') as pull:
+            ensure_two_sided_weather(panel, 'custom_weather.parquet')
+        pull.assert_not_called()
+
+    def test_default_two_sided_weather_raises_if_top_up_still_missing(self):
+        panel = pd.DataFrame([dict(season=2025, game_id='missing')])
+        failures = pd.DataFrame([dict(game_id='missing', error='No reanalysis hour within 2 hours of kickoff')])
+        with patch('backtester.Path.exists', return_value=True), \
+             patch('backtester.pd.read_parquet', side_effect=[
+                 pd.DataFrame({'game_id': []}), pd.DataFrame({'game_id': []})]), \
+             patch('pull_weather.pull_historical', return_value=(pd.DataFrame(), failures)), \
+             patch('pull_weather.build_weather_features'):
+            with self.assertRaisesRegex(ValueError, 'still missing'):
+                ensure_two_sided_weather(panel, 'data/weather/historical_features.parquet')
 
     def test_cutoffs_do_not_change_with_validation_outcomes(self):
         rows = []
