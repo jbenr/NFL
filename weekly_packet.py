@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import model_spec
+
 
 STYLE = '''
 body{font:15px/1.5 system-ui,sans-serif;color:#203039;background:#f1f3f1;margin:0}
@@ -195,7 +197,12 @@ STYLE += '''
 .packet-bundle .pkgtab-radio{display:block;position:absolute;opacity:0;width:1px;height:1px}
 .pkgtab-radio:focus-visible+.pkgtab-label{outline:2px solid #8fc9ef;outline-offset:-3px}
 main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
-#pt-stats:checked~.pkgpanel[data-tab=stats]{display:block}
+#pt-stats:checked~.pkgpanel[data-tab=stats]{display:block}#pt-specs:checked~.pkgpanel[data-tab=specs]{display:block}
+/* Specs tab (specs_page): label | value rows, one column on a phone. */
+.spec-card h2{margin-top:0}.spec-list{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);gap:7px 18px;margin:0;font-size:13px;line-height:1.45}
+.spec-list dt{color:#9ba8b5}.spec-list dd{margin:0;overflow-wrap:anywhere}.spec-list .spec-list{grid-template-columns:minmax(110px,170px) minmax(0,1fr)}
+.spec-list ul{margin:0;padding-left:18px}
+@media(max-width:650px){.spec-list,.spec-list .spec-list{grid-template-columns:1fr;gap:2px}.spec-list dd{margin-bottom:8px}}
 .headline-table,.stats-table{background:#111;color:#e3e6e9;font:12px/1.25 Arial,sans-serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
 .headline-table{width:100%}
 /* Stats tables size to their own content (3-6 columns of team/value data)
@@ -346,8 +353,8 @@ def lookback_description(season, week, lookback):
            '(not the team\'s win/loss record); under Defense it\'s the same rating averaged over the opposing '
            'QBs actually faced, i.e. strength of the passing competition seen so far. (#1) is best; click a '
            'column header to sort by rank.</p>'
-           '<p>Raw: flat average over the lookback window. Model: the same plays, weighted the way the two-sided '
-           'model itself weighs them (recent games count more). QB Elo is already recency-weighted either way, '
+           '<p>Raw: flat average over the lookback window. Model: the same plays, weighted the way the model '
+           'itself weighs them (recent games count more). QB Elo is already recency-weighted either way, '
            'so it doesn\'t change between the two.</p></details>')
 
 
@@ -356,7 +363,7 @@ def display_stats(season, week, lookback, calculation='mean'):
     always uses its own separately-standardized version of these, even
     when calculation matches). calculation='mean' (default): unweighted
     average over the lookback window -- "raw". calculation='steep': the
-    same recency decay the two-sided model itself uses for its own
+    same recency decay the model itself uses for its own
     features -- "model". Same plays, same window, different pooling."""
     import data_crunchski_2 as dc
     import utils
@@ -593,7 +600,7 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
         value = values[feature]
         label, left, right = map(escape, context_cells(feature, row))
         if feature == 'home_field_adv':
-            other.append(f'<div class="site-row"><div class="site-label"><strong>{label}</strong>{left}</div>'
+            other.append(f'<div class="site-row"><div class="site-label">{label}{left}</div>'
                          f'{point_bar(value, scale, row)}<div class="context-value">{right}</div></div>')
             continue
         other.append(f'<div class="stat-line context-row"><div class="stat-name">{label}</div>'
@@ -601,8 +608,7 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
                      f'<div class="context-value">{right}</div></div>')
     # two_sided_packet's weather inputs, one row each under a small heading
     # carrying the kickoff time, each with the value it had on the right.
-    weather_order = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches', 'snowfall_inches',
-                     'snow_depth_inches', 'indoor']
+    weather_order = ['feels_like_f', 'wind_mph', 'precip_inches']
     weather = sorted((f for f in values if f.startswith('context_weather_') and f not in used),
                      key=lambda f: (weather_order.index(f[16:]) if f[16:] in weather_order else len(weather_order), f))
     if weather:
@@ -945,9 +951,9 @@ def weather_details(row):
     heading, {weather input: the value it had}) -- e.g. 'Sun Sep 20 · 4:25 PM
     ET' and {'feels_like_f': '95°F', 'wind_mph': '3.6 mph', ...}. These are
     the model's own inputs, so an indoor game reads the fixed 72°F / calm /
-    dry conditions the model uses there; the Indoor row names the roof
-    (including when the schedule doesn't list one yet, which the model
-    treats as outdoors)."""
+    dry conditions the model uses there. The feels-like reading also names
+    the roof when it isn't plain outdoors -- including when the schedule
+    doesn't list one yet, which the model treats as outdoors."""
     def number(column):
         value = row.get(column)
         return float(value) if pd.notna(value) else None
@@ -962,17 +968,39 @@ def weather_details(row):
     indoor = roof in ('dome', 'closed')
     feels, air = number('feels_like_f'), number('temperature_f') if number('temperature_f') is not None else number('temp')
     reading = lambda value, fmt: format(value, fmt) if value is not None else '—'
+    roof_note = {'dome': 'dome', 'closed': 'roof closed', 'open': 'roof open', 'outdoors': ''}.get(roof, 'roof not listed')
     values = {
-        'feels_like_f': (f'{feels:.0f}°F' if feels is not None else '—') + (f' (air {air:.0f}°F)' if air is not None and not indoor else ''),
+        'feels_like_f': ' · '.join(p for p in [(f'{feels:.0f}°F' if feels is not None else '—')
+                                               + (f' (air {air:.0f}°F)' if air is not None and not indoor else ''), roof_note] if p),
         'wind_mph': reading(number('wind_mph'), '.1f') + ' mph',
         'precip_inches': reading(number('precip_inches'), '.2f') + ' in',
-        'rain_inches': reading(number('rain_inches'), '.2f') + ' in',
-        'snowfall_inches': reading(number('snowfall_inches'), '.1f') + ' in',
-        'snow_depth_inches': reading(number('snow_depth_inches'), '.1f') + ' in',
-        'indoor': {'dome': 'Yes · dome', 'closed': 'Yes · roof closed', 'open': 'No · roof open',
-                   'outdoors': 'No'}.get(roof, 'No · roof not listed'),
     }
     return kickoff, {k: v.replace('— mph', '—').replace('— in', '—') for k, v in values.items()}
+
+
+def specs_page(spec):
+    """The Specs tab: model_spec's spec for this run, as labeled sections --
+    the same content as the run folder's model.json, readable in the packet."""
+    def label(key):
+        return key.replace('_', ' ').capitalize()
+
+    def render(value):
+        if isinstance(value, dict):
+            return '<dl class="spec-list">' + ''.join(
+                f'<dt>{escape(label(k))}</dt><dd>{render(v)}</dd>' for k, v in value.items()) + '</dl>'
+        if isinstance(value, list):
+            short = all(len(str(v)) < 40 for v in value)
+            return (escape(', '.join(map(str, value))) if short
+                    else '<ul>' + ''.join(f'<li>{escape(str(v))}</li>' for v in value) + '</ul>')
+        return escape(str(value))
+
+    model = spec['model']
+    head = (f'<h1>{escape(model["name"])} {escape(model["version"])}</h1>'
+            f'<p class="report-date">Code {escape(model["code"])} · generated {escape(model["generated"])} · '
+            'also saved as model.json next to this packet</p>')
+    sections = ''.join(f'<section class="card spec-card"><h2>{escape(label(key))}</h2>{render(value)}</section>'
+                       for key, value in spec.items() if key != 'model')
+    return head + sections
 
 
 def packet_tabs(active):
@@ -980,7 +1008,7 @@ def packet_tabs(active):
         f'<a href="{path}"{""" aria-current="page" """ if key == active else ""}>{label}</a>'
         for key, path, label in [('headline', 'index.html', 'Headline'), ('spread', 'spread.html', 'Spread'),
                                 ('total', 'total.html', 'Totals'), ('importance', 'importance.html', 'Feature importance'),
-                                ('stats', 'stats.html', 'Stats')]) + '</nav>'
+                                ('stats', 'stats.html', 'Stats'), ('specs', 'specs.html', 'Specs')]) + '</nav>'
 
 
 def bundle_single_file(folder):
@@ -988,7 +1016,7 @@ def bundle_single_file(folder):
     folder = Path(folder)
     pages = [('headline', 'Headline', 'index.html'), ('spread', 'Spread', 'spread.html'),
              ('total', 'Totals', 'total.html'), ('importance', 'Feature importance', 'importance.html'),
-             ('stats', 'Stats', 'stats.html')]
+             ('stats', 'Stats', 'stats.html'), ('specs', 'Specs', 'specs.html')]
     tabs, panels, title = [], [], 'Weekly packet'
     for key, label, name in pages:
         path = folder / name
@@ -1345,14 +1373,16 @@ def write_packets(predictions, panel, importance, config, root):
     root = Path(root)
     market = config['market']
     for (season, week), games in predictions.groupby(['season', 'week']):
-        shared = config['calculation'] in ['shared-scoring-v1', 'joint-matchup-v1', 'two-sided-team-points-v1']
+        shared = config['calculation'] in ['shared-scoring-v1', 'joint-matchup-v1', 'two-sided-team-points-v1', model_spec.ID]
         snapshot = display_stats(season, week, config['lookback']) if market == 'spread' or shared else pd.DataFrame()
-        # 'steep' is what two_sided_packet actually feeds the model (see
-        # shared_scoring.py's build_panel call) -- only known to be accurate
-        # for that one calculation, so the Raw/Model toggle is scoped to it
-        # rather than guessed at for other model families.
-        weighted_snapshot = (display_stats(season, week, config['lookback'], calculation='steep')
-                             if config['calculation'] == 'two-sided-team-points-v1' and not snapshot.empty else None)
+        # The Stats tab's "Model" view uses the recency preset the model was
+        # actually built with (config['feature_calculation'], set by
+        # two_sided_packet; 'steep' for runs from before it was recorded).
+        # Scoped to this model family rather than guessed at for others.
+        weighted_snapshot = (display_stats(season, week, config['lookback'],
+                                           calculation=config.get('feature_calculation', 'steep'))
+                             if config['calculation'] in ('two-sided-team-points-v1', model_spec.ID)
+                             and not snapshot.empty else None)
         folder = root / f'{int(season)}_{int(week):02d}'
         folder.mkdir(parents=True, exist_ok=True)
         # Cards in kickoff order, not whatever order the panel happened to
@@ -1414,9 +1444,9 @@ def write_packets(predictions, panel, importance, config, root):
                                              'team’s defense-vs-opposing-offense inputs. Expand either bar for one row per stat.'),
                 ('Home field and rest', 'Fixed adjustments: a learned weight times the home-field or rest-day difference, '
                                         'measured from a neutral site with equal rest.'),
-                ('Weather', 'Also measured from the average training game, which is partly indoors and has a little snow '
-                            'on the ground, so a dry, snow-free outdoor game still shows small weather bars. Those come '
-                            'from that average, not from the actual conditions. '
+                ('Weather', 'The model uses feels-like temperature, wind and precipitation. Indoor games get fixed '
+                            '72°F, calm, dry readings. The bars are measured from the average training game, so an '
+                            'ordinary day can still show small ones; those come from that average, not the conditions. '
                             + ('Both teams share the same weather, so it only moves the spread through how it combines '
                                'with each team’s stats, and those effects vary a lot between the ensemble’s runs. '
                                if spread_page else '')
@@ -1444,7 +1474,8 @@ def write_packets(predictions, panel, importance, config, root):
             fi = '<p class="warn">Saved feature-importance labels also require regeneration. They are hidden until the shared-scoring preview is rerun.</p>'
         games.to_csv(folder / f'{market}_details.csv', index=False)
         importance.to_csv(folder / f'{market}_importance.csv', index=False)
-        (folder / f'{market}_config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
+        (folder / f'{market}_config.json').write_text(json.dumps({k: v for k, v in config.items() if k != 'spec'}, indent=2),
+                                                     encoding='utf-8')
         footer = ('<details class="sheet-notes"><summary>Notes</summary>'
                   + ''.join(f'<p><strong>{escape(title)}.</strong> {escape(text)}</p>' for title, text in notes) + '</details>')
         (folder / f'{market}.html').write_text(page(title, header + ''.join(cards) + footer, 'packet'), encoding='utf-8')
@@ -1457,6 +1488,9 @@ def write_packets(predictions, panel, importance, config, root):
         (folder / 'index.html').write_text(page(title, packet_tabs('headline') + headline, 'packet headline-shell'), encoding='utf-8')
         (folder / 'stats.html').write_text(page(title, packet_tabs('stats') + '<h1>Stats</h1>'
             + stats_tables(snapshot, games, season, week, config['lookback'], weighted_snapshot), 'packet headline-shell'), encoding='utf-8')
+        if config.get('spec'):
+            (folder / 'specs.html').write_text(page(title, packet_tabs('specs') + specs_page(config['spec']), 'packet'),
+                                               encoding='utf-8')
         for missing in ['spread', 'total']:
             if not (folder / f'{missing}.html').exists():
                 (folder / f'{missing}.html').write_text(page(title, packet_tabs(missing) +
@@ -1602,7 +1636,7 @@ def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
     nothing to restyle for a two-sided packet produced since that change; refit
     it with --refresh instead."""
     if shared:
-        root = Path(f'data/results/packet_shared/{season}_{week}_{lookback}')
+        root = model_spec.run_folder(season, week, lookback)
         folder = root
     else:
         root = Path(f'data/results/{season}_{week}_{lookback}/{"packet_symmetric" if symmetric else "packet"}')
@@ -1631,12 +1665,12 @@ def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Build a weekly packet by fitting the chosen model '
-                                     '-- writes to data/results/packet_shared/{season}_{week}_{lookback}/.')
-    parser.add_argument('--model', choices=['two-sided', 'neural'], default='two-sided',
-                        help="'two-sided': league z-scores, symmetric usage scaling, historical weather "
-                             "(backtester.py --model two-sided's model). 'neural': the original single-network "
-                             "packet (main.py --packet's model). Default: two-sided.")
+    parser = argparse.ArgumentParser(description=f'Build a weekly packet by fitting the chosen model -- '
+                                     f'{model_spec.LABEL} writes to {model_spec.RESULTS}/{{season}}_{{week}}_{{lookback}}/ '
+                                     'with a model.json spec.')
+    parser.add_argument('--model', choices=['model', 'two-sided', 'neural'], default='model',
+                        help=f"'model' (default): {model_spec.LABEL} ('two-sided' is the same thing, its old name). "
+                             "'neural': the original single-network packet (main.py --packet's model).")
     parser.add_argument('--season', type=int, required=True)
     parser.add_argument('--week', type=int, required=True)
     parser.add_argument('--refresh', action='store_true',
@@ -1659,12 +1693,12 @@ if __name__ == '__main__':
     if args.restyle:
         if args.refresh:
             parser.error('--restyle re-renders what is already saved; --refresh refits from new data. Pick one.')
-        refresh_packet(args.season, args.week, args.lookback, shared=args.model == 'two-sided')
+        refresh_packet(args.season, args.week, args.lookback, shared=args.model != 'neural')
     else:
         if args.refresh:
-            refresh_inputs(args.season, args.week, shared=args.model == 'two-sided',
+            refresh_inputs(args.season, args.week, shared=args.model != 'neural',
                            forecast_file=args.forecast_file)
-        if args.model == 'two-sided':
+        if args.model != 'neural':
             from shared_scoring import two_sided_packet
             two_sided_packet(args.season, args.week, args.lookback, args.train_window, args.iterations,
                              args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file)

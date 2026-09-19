@@ -528,7 +528,7 @@ def two_sided_season(args):
                   lookback=args.lookback, train_window=args.train_window, calculation='steep',
                   inputs='league_snapshot_zscore', usage_scaling='symmetric_post_normalization',
                   weather_source='historical_reanalysis', weather_file=str(weather_file),
-                  weather_features=dc3.HISTORICAL_WEATHER, iterations=args.iterations,
+                  weather_features=dc3.MODEL_WEATHER, iterations=args.iterations,
                   epochs=args.epochs, seed=args.seed, status='RETROSPECTIVE — NOT PREGAME VALIDATION',
                   qb_decay='existing QB Elo decay unchanged')
     fingerprint = utils.cache_path('two_sided_runs', config, [__file__, 'data_crunchski_3.py',

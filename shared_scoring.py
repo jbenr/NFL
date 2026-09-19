@@ -204,8 +204,12 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
     digest = hashlib.sha256(b''.join(a.tobytes() for a in [x, y, xp])).hexdigest()
     identity = [digest, names, offset, season, week, iterations, epochs, seed,
                target[['away_team', 'home_team']].to_dict('list')]
-    cached = utils.cache_path('two_sided_scores', identity,
-                              [__file__, 'data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])
+    # Keyed on the code that actually fits (these functions + the data prep,
+    # network and worker modules), not all of shared_scoring.py -- so editing
+    # the packet/spec code below doesn't throw away a 4-minute fit.
+    fit_code = [inspect.getsource(f) for f in (fit_two_sided, fit_member, build_model)]
+    cached = utils.cache_path('two_sided_scores', identity + fit_code,
+                              ['data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])
     importance_path = cached.with_suffix('.importance.parquet')
     if cached.exists() and importance_path.exists():
         print(f'  {season} wk{week}: two-sided scores cached', flush=True)
@@ -274,8 +278,8 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     """Single-week two-sided packet -- same model/inputs as backtester.py's
     --model two-sided (league z-scores, symmetric usage scaling, historical
     weather), but one target week instead of a season-long backtest, written
-    to data/results/packet_shared/{season}_{week}_{lookback}/packet_{yy}w{week}.html via
-    weekly_packet.write_packets. This is the ongoing production path for
+    to data/results/model_2.0/{season}_{week}_{lookback}/packet_{yy}w{week}.html via
+    weekly_packet.write_packets, with model.json (model_spec) next to it. This is the ongoing production path for
     that packet; fit_panel/preview (the older percentile-diff
     representation) are retired.
 
@@ -296,6 +300,9 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     import data_crunchski_3 as dc3
     from backtester import KEY, build_panel, history_weeks, market_panel, settle
     from weekly_packet import write_packets
+    import model_spec
+    print(f'{model_spec.LABEL} · code {model_spec.code_version()} · {season} week {week} '
+          f'-> {model_spec.run_folder(season, week, lookback)}', flush=True)
     sched = pd.read_parquet('data/sched.parquet')
     prior = (sched.season < season) | ((sched.season == season) & (sched.week < week))
     stale = sched.loc[prior & sched.away_score.isna()]
@@ -345,31 +352,36 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         raise ValueError(f'{season} wk{week}: need {train_window} prior regular training weeks; got {len(regular)}')
     data = pd.concat([history[history.week_id >= regular[-train_window]], target_rows]).sort_values(KEY)
     details, importance = fit_two_sided(data, season, week, iterations, epochs, seed, jobs or min(iterations, 8))
-    config = dict(model=f'two-sided-team-points-v1 / {iterations} members', calculation='two-sided-team-points-v1',
-                  lookback=lookback, train_window=train_window, status='PASS', attribution_schema=2,
-                  reason='Experimental two-sided scoring with historical weather; no validated betting cutoffs',
-                  importance_note='Each bar is a paired refit/drop test: remove one feature (from both the '
-                                  'away-attacking and home-attacking sides of this shared-weight network), '
-                                  'retrain, and see how prediction error on the training sample changed. '
-                                  'Positive means removing it made the model worse (it was pulling weight); '
-                                  'negative means removing it made the model better (it was actively hurting '
-                                  'predictions). This is a training-sample diagnostic, not held-out betting '
-                                  'evidence, and correlated features can substitute for one another -- a low '
-                                  "score doesn't mean a feature is useless, just that something else covers it.",
-                  baseline_note='Both team scores share one network; each metric sums the away-attacking and '
-                                'home-attacking matchups (see fit_two_sided\'s docstring for the derivation).')
+    # Everything about this model and run, from the values actually used --
+    # shown in the packet's Specs tab and saved as model.json next to it.
+    training = data[(data.week_id < wid) & data.away_score.notna() & data.home_score.notna()]
+    spec = model_spec.spec(
+        season=season, week=week, lookback=lookback, train_window=train_window, iterations=iterations,
+        epochs=epochs, seed=seed, calculation=calc, training=training,
+        # Same network-input list prepare_two_sided builds (rows minus the linear context inputs).
+        features=[c for c in dc3.two_sided_rows(target_rows) if c not in BASE_CONTEXT],
+        weather_file=weather_file, forecast_file=forecast_file)
+    config = dict(model=f'{model_spec.LABEL} · {iterations} members', calculation=model_spec.ID, spec=spec,
+                  feature_calculation=calc, lookback=lookback, train_window=train_window, status='PASS',
+                  attribution_schema=2,
+                  reason=f'Pick cutoffs come from earlier backtests and are not re-validated for {model_spec.LABEL}',
+                  importance_note='Each bar is a shuffle test: one input is shuffled across 128 random training '
+                                  'rows and the rise in squared error is recorded, averaged across the ensemble. '
+                                  'Bigger means the model leans on that input more. It is measured on training '
+                                  'data, not held-out games, and correlated inputs can stand in for each other, '
+                                  "so a small bar doesn't mean an input is useless.",
+                  baseline_note='Both team scores come from one shared network; the baseline is the average '
+                                'training game.')
     # write_packets needs its usual index/spread/total/importance/stats
     # pages + CSVs on disk to cross-reference each other and to bundle into
     # one portable file (bundle_single_file, called from inside
     # write_packets) -- only packet.html and the small, prediction-free
-    # {market}_config.json (model/notes metadata, already visible as text
-    # on the page -- kept only because refresh_packet() reads it back) are
-    # worth keeping afterward; the rest is built in a scratch directory and
-    # discarded. NOTE: refresh_packet(shared=True) can no longer restyle a
+    # model.json (model_spec) are worth keeping afterward; the rest is built
+    # in a scratch directory and discarded. NOTE: refresh_packet(shared=True) can no longer restyle a
     # saved packet without refitting -- the *_details.csv/*_importance.csv
     # it needs for that no longer get kept on disk. That's an accepted
     # tradeoff for not cluttering data/results/, not an oversight.
-    final_folder = Path(f'data/results/packet_shared/{season}_{week}_{lookback}')
+    final_folder = model_spec.run_folder(season, week, lookback)
     with tempfile.TemporaryDirectory() as scratch:
         scratch_output = Path(scratch)
         for market in ['spread', 'total']:
@@ -389,11 +401,9 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         final_folder.mkdir(parents=True, exist_ok=True)
         final_path = final_folder / f'packet_{season % 100:02d}w{week}.html'
         shutil.move(str(bundled), str(final_path))
-        for market in ['spread', 'total']:
-            saved_config = scratch_folder / f'{market}_config.json'
-            if saved_config.exists():
-                shutil.move(str(saved_config), str(final_folder / saved_config.name))
+    model_spec.write(final_folder, spec)
     print(f'Packet: {final_path}')
+    print(f'Model spec: {final_folder / "model.json"}')
     return details
 
 

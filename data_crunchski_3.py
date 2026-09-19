@@ -12,6 +12,12 @@ BASE_CONTEXT = ['home_field', 'rest_advantage']
 INPUT_MODES = ['separate', 'differential', 'percentile', 'zscore']
 HISTORICAL_WEATHER = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches',
                       'snowfall_inches', 'snow_depth_inches']
+# The subset the two-sided model actually takes as inputs. Rain and snowfall
+# are parts of precip_inches, snow depth was nearly always zero, and indoor
+# games already carry fixed 72°F / calm / dry readings (attach_historical_weather),
+# so no separate indoor flag -- a dome now looks like a mild, calm, dry day.
+# HISTORICAL_WEATHER stays the loading/coverage contract for the weather files.
+MODEL_WEATHER = ['feels_like_f', 'wind_mph', 'precip_inches']
 
 
 def attach_historical_weather(panel, path, forecast_path=None):
@@ -67,8 +73,8 @@ def two_sided_rows(games):
                 own_def = own_def * (games[f'{opponent}_raw_off_{usage}_%'].to_numpy() + .5)
             values[f'own_off_{metric}'] = own_off
             values[f'own_def_{metric}'] = own_def
-        for column in HISTORICAL_WEATHER + ['weather_indoor']:
-            values['weather_' + column.removeprefix('weather_')] = games[column].to_numpy()
+        for column in MODEL_WEATHER:
+            values['weather_' + column] = games[column].to_numpy()
         values['home_field'] = games.home_field_adv.to_numpy() if side == 'home' else np.zeros(len(games))
         values['rest_advantage'] = games[f'{side}_rest'].to_numpy() - games[f'{opponent}_rest'].to_numpy()
         blocks.append(pd.DataFrame(values))

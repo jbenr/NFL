@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """pack_a_punch: email the newest weekly packet to your phone -- on any OS.
 
-Finds the most recently written packet HTML under data/results/ (two-sided
-packet_shared/*/packet_*.html or a neural .../packet.html) and sends it as an
+Finds the most recently written packet HTML anywhere under data/results/
+(any packet*.html -- e.g. model_2.0/2026_2_20/packet_26w2.html -- whatever
+model version or folder layout produced it) and sends it as an
 attachment through Gmail's SMTP server -- sent from SENDER, delivered to
 RECIPIENT -- so it's one tap away in the Gmail app on your phone. The
 headline table's picture (the packet's own "Copy" image) goes in the email
@@ -46,7 +47,7 @@ GMAIL_LIMIT = 25_000_000
 
 
 def newest_packet():
-    candidates = list(RESULTS.glob('packet_shared/*/packet_*.html')) + list(RESULTS.glob('*/packet*/*/packet.html'))
+    candidates = [path for path in RESULTS.rglob('packet*.html') if path.is_file()]
     if not candidates:
         raise SystemExit(f'No packet found under {RESULTS} -- run weekly_packet.py first.')
     return max(candidates, key=lambda path: path.stat().st_mtime)
