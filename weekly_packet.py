@@ -271,29 +271,25 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 #stats-mode-raw:checked~#stats-view-raw{display:block}
 #stats-mode-model:checked~#stats-view-model{display:block}
 .banner-team .team-copy{display:flex;flex-direction:column}.banner-qb{font:11px/1.4 Arial,sans-serif;color:#aaa;white-space:normal;margin-top:4px}
-.packet .pill.pick{background:#ffe590;color:#222}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}
+.packet .pill.pick{background:#ffe590;color:#222}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
+.sheet-notes p{font-size:13px;line-height:1.5;color:#c8cdd3;margin:10px 0}.sheet-notes strong{color:#eee}
 .pick-header{overflow-x:auto;border-bottom:1px solid #333;padding:10px 0 16px;margin-bottom:12px}
 .pick-grid{display:grid;grid-template-columns:160px repeat(5,minmax(60px,1fr)) 160px;min-width:700px;align-items:center;gap:6px 8px;text-align:center;font-variant-numeric:tabular-nums}
-.pick-label{font:10px Arial,sans-serif;color:#9ba8b5}.pick-label:first-child,.pick-qb{text-align:left}.pick-label:nth-child(7),.pick-qb.home{text-align:right}
+.pick-label{font:10px Arial,sans-serif;color:#9ba8b5}.pick-label:first-child,.pick-label:nth-child(7){font:12px Graduate,Georgia,serif}.pick-label:first-child,.pick-qb{text-align:left}.pick-label:nth-child(7),.pick-qb.home{text-align:right}
 .pick-team{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font:24px Graduate,serif}.pick-team.home{justify-content:flex-end}.pick-team .logo{width:52px;height:52px}
-.pick-value{font-size:15px;font-weight:600}.pick-qb{font:11px Arial,sans-serif;white-space:nowrap}.pick-score{grid-column:2/7;font:11px Arial,sans-serif;color:#c8cdd3}
+.pick-value{font-size:15px;font-weight:600}.pick-qb{font:12px Graduate,Georgia,serif;white-space:nowrap}
+.pick-score{grid-column:2/7;display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:baseline;font:12px Graduate,Georgia,serif;color:#9ba8b5}
+.pick-score .score-label{justify-self:end}.pick-score .score-value{color:#eee}
 summary.matchup-summary{padding-left:0}summary.matchup-summary:before{left:-12px}
 .site-row{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter);gap:var(--row-gap);align-items:center;margin:12px 0;font-size:11px}
 .site-label{white-space:nowrap}.site-label strong{margin-right:8px}.site-row .context-value{font-size:11px}
 .site-row .context-value{text-align:right}
 /* Weather: a heading, then one tight row per model input (matchup_attribution). */
-.context-group{font-size:11px;font-weight:700;margin:14px 0 2px}
+.context-group{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:11px;font-weight:700;margin:14px 0 2px}
+.context-group .context-value{font-size:11px;font-weight:400}
 .site-row.weather-factor{margin:5px 0}.weather-factor .site-label{padding-left:12px;color:#ccc}
 /* Closing line: baseline + every contribution + residual = the header's number. */
-.contrib-sum{border-top:1px solid #292d32;margin-top:14px;padding-top:9px;font:12px/1.5 Arial,sans-serif;color:#b7c0c9}
-.contrib-sum strong{color:#fff}
-/* weather_line (last row of the game header, styled like the QB/prediction
-   row above it): one row of whole segments (flex items) split by thin
-   dividers; on a narrow screen segments wrap as units instead, so the
-   dividers drop out rather than dangling at the start of a line. */
-.weather-line{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 0;margin:10px 0 0;font:11px/1.45 Arial,sans-serif;color:#c8cdd3}
-.weather-line span+span::before{content:'';display:inline-block;width:1px;height:10px;background:#41464e;margin:0 10px}
-@media(max-width:650px){.packet{--gutter:130px;--val-w:55px;--row-gap:5px}.stat-line{grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter)}.matchup-head{grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter)}.site-label{white-space:normal}.weather-line{gap:2px 14px}.weather-line span+span::before{display:none}}
+@media(max-width:650px){.packet{--gutter:130px;--val-w:55px;--row-gap:5px}.stat-line{grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter)}.matchup-head{grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter)}.site-label{white-space:normal}}
 @media(max-width:650px){.packet-bundle{padding:10px}.packet-bundle .pkgtab-label{padding:8px;font-size:12px}.headline-table img{height:26px;width:28px}}
 @media print{main.pkgpanel{display:block!important}.pkgtab-label,.pkgtab-radio{display:none!important}}
 '''
@@ -514,8 +510,7 @@ def context_cells(feature, row):
                  for side in ['away', 'home']]
         return 'Playoff leverage' if 'importance_method' in row else 'Game importance', cells[0], cells[1]
     if feature == 'context_weather':
-        # Just the bar: the readings behind it are in weather_line, directly
-        # above this chart, rather than repeated here.
+        # An older model's single combined weather feature: just the bar.
         return 'Weather', '', ''
     if feature not in ['away_rest_adv', 'home_field_adv', 'context_referee']:
         return label, '', ''
@@ -529,11 +524,13 @@ def context_cells(feature, row):
         detail = f'Avg {average:.1f} · n={int(count)}' if pd.notna(average) and pd.notna(count) else ''
         return 'Referee', name, detail
     if feature == 'home_field_adv':
-        # Stadium on the right of the bar. 'location' is a Home/Neutral
+        # Stadium and surface on the right of the bar. 'location' is a Home/Neutral
         # site-type flag, not a city -- only worth adding for a neutral site.
         venue = str(game.get('stadium')) if pd.notna(game.get('stadium')) else ''
+        surface = str(game.get('surface')).strip() if pd.notna(game.get('surface')) else ''
         neutral = str(game.get('location', '')).lower() == 'neutral'
-        return label, '', ' · '.join(p for p in [venue, 'neutral site' if neutral else ''] if p)
+        return label, '', ' · '.join(p for p in [venue, SURFACES.get(surface.lower(), surface.title()),
+                                                'neutral site' if neutral else ''] if p)
     away, home = game.get('away_rest'), game.get('home_rest')
     if pd.isna(away) or pd.isna(home):
         return label, '', ''
@@ -544,8 +541,7 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
     direction = 1 if row.get('market') == 'total' else -1
     # One entry per model feature, never combined or dropped for display:
     # offense/defense metrics go in the two expandable matchup bars, every
-    # other feature gets its own row below them, and the closing line shows
-    # baseline + all of them + residual landing exactly on the prediction.
+    # other feature gets its own row below them.
     values = {c[5:]: float(row[c]) for c in row.index if c.startswith('attr_') and pd.notna(row[c])}
     scale = max([abs(v) for v in values.values()] + [.01])
     net_scale = max([abs(sum(v for f, v in values.items() if f.startswith(prefix)))
@@ -603,31 +599,20 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
         other.append(f'<div class="stat-line context-row"><div class="stat-name">{label}</div>'
                      f'<div class="context-value">{left}</div>{point_bar(value, scale, row)}'
                      f'<div class="context-value">{right}</div></div>')
-    # two_sided_packet's weather inputs, one row each under a small heading.
-    # The readings themselves are in weather_line above the chart.
+    # two_sided_packet's weather inputs, one row each under a small heading
+    # carrying the kickoff time, each with the value it had on the right.
     weather_order = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches', 'snowfall_inches',
                      'snow_depth_inches', 'indoor']
     weather = sorted((f for f in values if f.startswith('context_weather_') and f not in used),
                      key=lambda f: (weather_order.index(f[16:]) if f[16:] in weather_order else len(weather_order), f))
     if weather:
-        other.append('<div class="context-group">Weather</div>' + ''.join(
+        kickoff, readings = weather_details(row)
+        other.append(f'<div class="context-group"><span>Weather</span><span class="context-value">{escape(kickoff)}</span></div>' + ''.join(
             f'<div class="site-row weather-factor"><div class="site-label">{escape(re.sub(r" [(].*[)]$", "", pretty(f)))}</div>'
-            f'{point_bar(values[f], scale, row)}<div class="context-value"></div></div>' for f in weather))
+            f'{point_bar(values[f], scale, row)}<div class="context-value">{escape(readings.get(f[16:], ""))}</div></div>'
+            for f in weather))
     total = sum(values.values())
     residual = row.prediction - row.baseline - total
-    # Reconciliation in the same terms as the header and the bars (spread
-    # from the away team's line, total in points). Parts are rounded first
-    # and the residual absorbs the rounding, so the printed sum is exact.
-    shown = lambda x: round(direction * x, 2) + 0.0  # + 0.0 turns -0.0 into 0.0
-    model, base, parts = shown(row.prediction), shown(row.baseline), shown(total)
-    rest = round(model - base - parts, 2) + 0.0
-    off_count, def_count = (sum(f.startswith(p) for f in used) for p in ['away_off_', 'away_def_'])
-    target = 'ModelLine' if direction == -1 else 'Model O/U'
-    number = (lambda x: f'{x:+.2f}') if direction == -1 else (lambda x: f'{x:.2f}')
-    other.append(f'<div class="contrib-sum"><strong>{target} {number(model)}</strong> = baseline {number(base)}'
-                 f' + {len(values)} feature contributions {parts:+.2f}'
-                 f' <span class="muted">({off_count} offense and {def_count} defense in the bars above, '
-                 f'{len(values) - off_count - def_count} listed here)</span> + residual {rest:+.2f}</div>')
     input_note = ('The shared model uses raw role-specific inputs with training-only standardization. Each displayed metric sums offense and opposing-defense effects. '
                   if shared else 'Display rates are separate from the model’s recency-weighted, league-ranked inputs. ')
     if differential:
@@ -928,7 +913,7 @@ def game_header(row, market, action):
             name = row.get(f'{side}_qb_name')
         elo = row.get(f'{side}_raw_off_qb_elo')
         text = escape(str(name)) if pd.notna(name) else 'QB unavailable'
-        return text + (f' · {elo:.0f} Elo' if pd.notna(elo) else '')
+        return text + (f' · {elo:.1f} Elo' if pd.notna(elo) else '')
 
     away, home = escape(row.away_team), escape(row.home_team)
     sign = -1 if market == 'spread' else 1
@@ -938,67 +923,56 @@ def game_header(row, market, action):
     headings = ['Away', 'MarketLine' if market == 'spread' else 'Market O/U',
                 'ModelLine' if market == 'spread' else 'Model O/U', 'Edge', 'SD', 'PICK', 'Home']
     labels = ''.join(f'<div class="pick-label">{h}</div>' for h in headings)
-    pick = '' if action == 'PASS' else f'<span class="pill pick">{escape(action)}</span>'
+    pick = '–' if action == 'PASS' else f'<span class="pill pick">{escape(action)}</span>'
     scores = ''
     if pd.notna(row.get('away_points')) and pd.notna(row.get('home_points')):
-        scores = f'Prediction: {away} {row.away_points:.1f} - {row.home_points:.1f} {home}'
-        if row.get('scores_implied', False) == True:
-            scores = scores.replace('Prediction:', 'Implied score:')
+        # Three cells (label | score | spacer) so the score itself sits dead
+        # center under the numbers, with its label just to the left.
+        label = 'Implied score:' if row.get('scores_implied', False) == True else 'Prediction:'
+        scores = (f'<span class="score-label">{label}</span>'
+                  f'<span class="score-value">{away} {row.away_points:.1f} - {row.home_points:.1f} {home}</span><span></span>')
     return ('<header class="pick-header"><div class="pick-grid">' + labels
             + f'<div class="pick-team">{logo(row.away_team)}{away}</div>'
             + ''.join(f'<div class="pick-value">{v}</div>' for v in values)
             + f'<div class="pick-value">{pick}</div>'
             + f'<div class="pick-team home">{home}{logo(row.home_team)}</div>'
             + f'<div class="pick-qb">{qb("away")}</div><div class="pick-score">{scores}</div>'
-            + f'<div class="pick-qb home">{qb("home")}</div></div>{weather_line(row)}</header>')
+            + f'<div class="pick-qb home">{qb("home")}</div></div></header>')
 
 
-def weather_line(row):
-    """The game header's last row, one compact line: when, where, and the
-    game-time weather the model used -- "Thu Sep 17 · 8:15 PM ET | Highmark
-    Stadium · Grass | 67°F (feels 72°F) | Wind 4.6 mph | Precip 0.00 in".
-    Segments wrap as whole pieces on narrow screens (see .weather-line).
-    Indoor games say so instead of listing outdoor readings the model
-    overrides anyway; rain/snow only appear when there's a nonzero amount;
-    a missing reading just drops its segment."""
+def weather_details(row):
+    """Right-hand text for the chart's Weather block: (kickoff for its
+    heading, {weather input: the value it had}) -- e.g. 'Sun Sep 20 · 4:25 PM
+    ET' and {'feels_like_f': '95°F', 'wind_mph': '3.6 mph', ...}. These are
+    the model's own inputs, so an indoor game reads the fixed 72°F / calm /
+    dry conditions the model uses there; the Indoor row names the roof
+    (including when the schedule doesn't list one yet, which the model
+    treats as outdoors)."""
     def number(column):
         value = row.get(column)
         return float(value) if pd.notna(value) else None
 
-    parts = []
     date = pd.to_datetime(row.get('gameday'), errors='coerce')
     time = pd.to_datetime(row.get('gametime'), format='%H:%M', errors='coerce')
-    when = [f'{date:%a %b} {date.day}' if pd.notna(date) else None,
-            f'{time:%I:%M %p} ET'.lstrip('0') if pd.notna(time) else None]
-    if any(when):
-        parts.append(' · '.join(p for p in when if p))
+    kickoff = ' · '.join(p for p in [f'{date:%a %b} {date.day}' if pd.notna(date) else None,
+                                     f'{time:%I:%M %p} ET'.lstrip('0') if pd.notna(time) else None] if p)
     game = schedule_game(row)
-    field = lambda name: str(game.get(name)).strip() if game is not None and pd.notna(game.get(name)) else ''
-    surface = field('surface')
-    venue = [field('stadium'), SURFACES.get(surface.lower(), surface.title()),
-             'Neutral site' if field('location').lower() == 'neutral' else '']
-    if any(venue):
-        parts.append(' · '.join(p for p in venue if p))
-    roof = str(row.get('roof') if pd.notna(row.get('roof')) else field('roof')).lower()
-    if roof in ('dome', 'closed'):
-        parts.append('Indoors (dome) · weather not a factor' if roof == 'dome' else 'Roof closed · weather not a factor')
-    else:
-        air, feels = number('temperature_f') if number('temperature_f') is not None else number('temp'), number('feels_like_f')
-        weather = []
-        if air is not None:
-            weather.append(f'{air:.0f}°F' + (f' (feels {feels:.0f}°F)' if feels is not None else ''))
-        elif feels is not None:
-            weather.append(f'Feels {feels:.0f}°F')
-        if number('wind_mph') is not None:
-            weather.append(f'Wind {number("wind_mph"):.1f} mph')
-        precip, rain, snow = number('precip_inches'), number('rain_inches'), number('snowfall_inches')
-        if precip is not None or rain is not None or snow is not None:
-            detail = [f'{kind} {amount:.2f} in' for kind, amount in [('rain', rain), ('snow', snow)] if amount and amount >= .005]
-            weather.append(f'Precip {precip or 0:.2f} in' + (f' ({", ".join(detail)})' if detail else ''))
-        if roof == 'open' and weather:
-            weather[0] = 'Roof open · ' + weather[0]
-        parts += weather or ['Weather unavailable']
-    return '<div class="weather-line">' + ''.join(f'<span>{escape(p)}</span>' for p in parts) + '</div>'
+    roof = row.get('roof') if pd.notna(row.get('roof')) else (game.get('roof') if game is not None else None)
+    roof = str(roof).strip().lower() if roof is not None and pd.notna(roof) else ''
+    indoor = roof in ('dome', 'closed')
+    feels, air = number('feels_like_f'), number('temperature_f') if number('temperature_f') is not None else number('temp')
+    reading = lambda value, fmt: format(value, fmt) if value is not None else '—'
+    values = {
+        'feels_like_f': (f'{feels:.0f}°F' if feels is not None else '—') + (f' (air {air:.0f}°F)' if air is not None and not indoor else ''),
+        'wind_mph': reading(number('wind_mph'), '.1f') + ' mph',
+        'precip_inches': reading(number('precip_inches'), '.2f') + ' in',
+        'rain_inches': reading(number('rain_inches'), '.2f') + ' in',
+        'snowfall_inches': reading(number('snowfall_inches'), '.1f') + ' in',
+        'snow_depth_inches': reading(number('snow_depth_inches'), '.1f') + ' in',
+        'indoor': {'dome': 'Yes · dome', 'closed': 'Yes · roof closed', 'open': 'No · roof open',
+                   'outdoors': 'No'}.get(roof, 'No · roof not listed'),
+    }
+    return kickoff, {k: v.replace('— mph', '—').replace('— in', '—') for k, v in values.items()}
 
 
 def packet_tabs(active):
@@ -1411,36 +1385,47 @@ def write_packets(predictions, panel, importance, config, root):
             # footer instead (below) rather than repeated per matchup.
             chart = re.sub(r'<details><summary>Calculation notes</summary>.*?</details>', '', chart, flags=re.DOTALL)
             cards.append(f'<section class="card">{game_header(row, market, action)}{chart}</section>')
-        # Same boilerplate that used to repeat inside every game's
-        # "Calculation notes"/"Pick details" dropdowns -- said once, always
-        # visible (no dropdown), generically (home/away team names dropped
-        # in favor of "the home team"/"the away team" since this no longer
-        # has one specific game to reference).
-        baseline_note = config.get('baseline_note', 'Baseline includes the market and fitted intercept.')
-        direction_note = ('Positive contributions favor the home team; negative favor the away team.' if market == 'spread'
-                          else 'Positive contributions raise the total; negative lower it.')
-        input_note = ('The shared model uses raw role-specific inputs with training-only standardization. Each displayed metric sums offense and opposing-defense effects. '
-                      if shared else 'Display rates are separate from the model’s recency-weighted, league-ranked inputs. ')
-        if config.get('input_mode') == 'differential':
-            input_note = ('Each model input is raw offense minus opposing-defense stat, standardized using prior training data. '
-                          'Displayed team rates are unweighted; model rate calculations retain the legacy recency weighting. ')
-        if config.get('model_family') == 'joint':
-            input_note += 'Both matchups and context interact through shared weights; margin and total are independently trained targets. '
-        notes = ['<h3>Data & model notes</h3><p>Stored-line analysis, not executable bets. Starting-QB availability is not timestamp-verified. SD measures model disagreement, not game-outcome risk.</p>']
+        # Notes: short, plain and accurate, closed by default at the bottom
+        # of the page. The attribution notes describe two_sided_packet's
+        # shared network (see fit_two_sided and matchup_attribution); other
+        # model families get the generic version.
+        spread_page = market == 'spread'
+        notes = [
+            ('Picks', f'A pick needs an edge of at least {cutoffs["diff_cutoff"]:g} points and an SD of at most '
+                      f'{cutoffs["sd_cutoff"]:.2f}; otherwise PICK shows –. Lines are stored market lines, not live '
+                      'odds, and starting QBs aren’t verified.'),
+            ('Numbers', f'{"ModelLine" if spread_page else "Model O/U"} and the predicted scores are averages across the '
+                        'model’s ensemble; SD is how much its runs disagree, not game risk. QB Elo is the scheduled '
+                        f'starter’s recency-weighted rating going into the game. Stat ranks use pregame rates over the previous {config["lookback"]} '
+                        'regular-season weeks; #1 is best.'),
+        ]
         if config.get('context_note'):
-            notes.append(f'<h3>Context data</h3><p>{escape(config["context_note"])}</p>')
-        notes.append(f'<h3>Calculation notes</h3><p>Observed, unweighted rates over the pregame feature window; #1 is best, ties share rank. '
-                     f'Ranks include teams on bye, using their most recent scheduled QB when needed. QB ranks: offense higher first, defense lower first. '
-                     f'Penalty ranks: fewer possession-based flags first, not necessarily flags committed by that unit. Defensive QB Elo measures opposing '
-                     f'QB game production allowed, lower is better. New feature builds include relief-QB production without league-average subtraction; '
-                     f'older cached runs retain the previous centered metric. {input_note}{direction_note} Section nets sum feature contributions, not '
-                     f'predicted team scores. Net bars share a scale with each other; feature bars share their own scale. Display rounding can affect '
-                     f'visible sums; calculations retain full precision. The Home field row combines home-site, stadium and field contributions for '
-                     f'display only. Referee average totals are shrunk toward the earlier league mean with 20 prior games of weight; same-week and future '
-                     f'results are excluded. Contributions explain the fitted prediction, not causal effects.</p>')
-        notes.append(f'<h3>Pick details</h3><p>A pick qualifies when edge is at least {cutoffs["diff_cutoff"]:g} points and SD is at most '
-                     f'{cutoffs["sd_cutoff"]:.2f}; a blank Pick cell means those cutoffs weren\'t met, shown for reference rather than as a bet '
-                     f'recommendation. {escape(baseline_note)} PnL simulates one unit risked at the game\'s own stored/assumed odds; a push returns the stake.</p>')
+            notes.append(('Context data', config['context_note']))
+        if shared:
+            notes += [
+                ('How the bars work', 'Each bar is one input’s share of this game’s prediction, measured from an average '
+                                      'training game (every input at its training average) and averaged across the ensemble. '
+                                      + ('Bars are in away-line terms: negative favors the away team, positive the home team.'
+                                         if spread_page else 'Bars are in points: positive raises the total.')),
+                ('Offense and defense bars', 'Both teams are scored by the same network. The first bar '
+                                             + ('nets' if spread_page else 'adds') + ' each team’s offense-vs-opposing-defense '
+                                             'inputs to its own score, so it also reflects the home offense against the away '
+                                             'defense, not only the matchup in its label. The second bar does the same for each '
+                                             'team’s defense-vs-opposing-offense inputs. Expand either bar for one row per stat.'),
+                ('Home field and rest', 'Fixed adjustments: a learned weight times the home-field or rest-day difference, '
+                                        'measured from a neutral site with equal rest.'),
+                ('Weather', 'Also measured from the average training game, which is partly indoors and has a little snow '
+                            'on the ground, so a dry, snow-free outdoor game still shows small weather bars. Those come '
+                            'from that average, not from the actual conditions. '
+                            + ('Both teams share the same weather, so it only moves the spread through how it combines '
+                               'with each team’s stats, and those effects vary a lot between the ensemble’s runs. '
+                               if spread_page else '')
+                            + 'A retractable roof the schedule doesn’t list yet is treated as outdoors.'),
+            ]
+        else:
+            notes.append(('How the bars work', 'Each bar is one input’s share of this game’s prediction relative to the '
+                                               f'model’s baseline. {config.get("baseline_note", "")}'.strip()))
+        notes.append(('Caveat', 'Bars explain the model’s prediction, not what causes games to turn out a certain way.'))
         # Full set, not just the top 12 -- scrollable container keeps the
         # page from turning into one giant bar chart while still letting
         # you page through every feature, not just the headline few.
@@ -1460,7 +1445,8 @@ def write_packets(predictions, panel, importance, config, root):
         games.to_csv(folder / f'{market}_details.csv', index=False)
         importance.to_csv(folder / f'{market}_importance.csv', index=False)
         (folder / f'{market}_config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
-        footer = '<footer class="sheet-notes"><h2>Notes</h2>' + ''.join(notes) + '</footer>'
+        footer = ('<details class="sheet-notes"><summary>Notes</summary>'
+                  + ''.join(f'<p><strong>{escape(title)}.</strong> {escape(text)}</p>' for title, text in notes) + '</details>')
         (folder / f'{market}.html').write_text(page(title, header + ''.join(cards) + footer, 'packet'), encoding='utf-8')
         (folder / f'{market}_importance.html').write_text(fi, encoding='utf-8')
         evidence = ''.join(f'<h2>{name.title()}</h2>' + (folder / f'{name}_importance.html').read_text()
