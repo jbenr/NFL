@@ -4,7 +4,9 @@
 Finds the most recently written packet HTML under data/results/ (two-sided
 packet_shared/*/packet_*.html or a neural .../packet.html) and sends it as an
 attachment through Gmail's SMTP server -- sent from SENDER, delivered to
-RECIPIENT -- so it's one tap away in the Gmail app on your phone. Standard
+RECIPIENT -- so it's one tap away in the Gmail app on your phone. The
+headline table's picture (the packet's own "Copy" image) goes in the email
+body too, so the picks are readable without opening anything. Standard
 library only, so it runs anywhere Python 3 does:
 
     Mac / Linux / WSL:  ./pack_a_punch.py  (or an alias pointing at it)
@@ -22,6 +24,7 @@ environment variable.
     pack_a_punch --dry-run   # show what would be sent, send nothing
 """
 import argparse
+import base64
 import os
 import re
 import smtplib
@@ -29,6 +32,8 @@ import ssl
 import sys
 from datetime import datetime
 from email.message import EmailMessage
+from email.utils import make_msgid
+from html import escape
 from pathlib import Path
 
 SENDER = 'beniboo2@gmail.com'  # Logs in and sends; the app password belongs to this account.
@@ -63,16 +68,37 @@ def app_password():
     return password.replace(' ', '')  # Google shows it in groups of four; spaces aren't part of it.
 
 
+def headline_picture(html):
+    """(PNG bytes, display width) of the picks table the packet embeds for
+    its Copy button (weekly_packet.picks_png), or None for a packet built
+    before that existed."""
+    found = re.search(r'<img id="picks-png"[^>]*?width="(\d+)"[^>]*?src="data:image/png;base64,([^"]+)"', html)
+    return (base64.b64decode(found.group(2)), int(found.group(1))) if found else None
+
+
 def build_message(packet, to):
     written = datetime.fromtimestamp(packet.stat().st_mtime)
-    size = packet.stat().st_size
+    data = packet.read_bytes()
+    note = f'{packet.name} ({len(data) / 1e6:.1f} MB), generated {written:%a %b %d, %I:%M %p}.'
     message = EmailMessage()
     message['Subject'] = f'NFL packet · {describe(packet)}'
     message['From'] = SENDER
     message['To'] = to
-    message.set_content(f'{packet.name} ({size / 1e6:.1f} MB), generated {written:%a %b %d, %I:%M %p}.\n'
-                        f'From {packet.relative_to(RESULTS.parent.parent)}\n')
-    message.add_attachment(packet.read_bytes(), maintype='text', subtype='html', filename=packet.name)
+    message.set_content(f'{note}\nFrom {packet.relative_to(RESULTS.parent.parent)}\n')
+    picture = headline_picture(data.decode('utf-8', errors='replace'))
+    if picture:
+        # HTML body with the table inline (a related cid: image, which Gmail
+        # shows in place); the plain text above stays as the fallback.
+        png, width = picture
+        cid = make_msgid(domain='pack-a-punch')
+        message.add_alternative(
+            f'<p style="margin:0 0 12px"><img src="cid:{cid[1:-1]}" width="{width}" '
+            f'alt="Model picks, {escape(describe(packet))}" style="max-width:100%;height:auto;display:block"></p>'
+            f'<p style="font:13px Arial,sans-serif;color:#555;margin:0">{escape(note)} Full packet attached.</p>',
+            subtype='html')
+        message.get_payload()[1].add_related(png, 'image', 'png', cid=cid, disposition='inline',
+                                               filename=f'picks_{packet.stem}.png')
+    message.add_attachment(data, maintype='text', subtype='html', filename=packet.name)
     return message
 
 
@@ -84,8 +110,10 @@ def main(argv=None):
     packet = newest_packet()
     message = build_message(packet, args.to)
     encoded = len(message.as_bytes())
+    inline = 'headline table in the body' if message.is_multipart() and any(
+        part.get_content_type() == 'image/png' for part in message.walk()) else 'no headline picture in this packet'
     print(f'{packet.relative_to(RESULTS.parent.parent)}  ->  {args.to}  (from {SENDER})\n'
-          f'  subject "{message["Subject"]}", {encoded / 1e6:.1f} MB as an email (Gmail max {GMAIL_LIMIT / 1e6:.0f})')
+          f'  subject "{message["Subject"]}", {inline}, {encoded / 1e6:.1f} MB as an email (Gmail max {GMAIL_LIMIT / 1e6:.0f})')
     if encoded > GMAIL_LIMIT:
         raise SystemExit('Too big for Gmail -- not sent.')
     if args.dry_run:

@@ -138,9 +138,9 @@ details.matchup{position:relative}
 .banner-center{text-align:center}.banner-center .game-line{justify-content:center;border:0;padding:7px 0;gap:8px 14px;font-size:13px}
 .banner-total{font-size:12px;color:#ccc;margin-top:6px}
 @media(max-width:650px){.match-banner{grid-template-columns:1fr 1fr}.banner-center{grid-column:1/-1;grid-row:2}.banner-team .identity{font-size:22px}.banner-team .logo{width:48px;height:48px}}
-/* .headline-table-light: the "Copy" button's clipboard payload uses this --
-   white background/dark text so it looks right pasted into an email/Slack/
-   doc, instead of the on-page dark .headline-table theme (further down). */
+/* .headline-table-light: the white/dark-text look of the "Copy" picture.
+   The table itself isn't on the page -- picks_png() draws the picture from
+   its HTML following these rules, so change both together. */
 .headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Arial,sans-serif;width:100%}
 .headline-table-light th,.headline-table-light td{padding:2px 6px;border:1px solid #ddd;text-align:center;line-height:1.25;white-space:nowrap}
 .headline-table-light th{background:#f2f2f2;font-weight:600}
@@ -179,21 +179,14 @@ STYLE += '''
 .copy-feedback{font:12px Arial,sans-serif;color:#8bd9ab;opacity:0}
 .copy-feedback.show{animation:copyFeedbackFade 3s ease forwards}
 @keyframes copyFeedbackFade{0%{opacity:0}10%{opacity:1}70%{opacity:1}100%{opacity:0}}
-/* Off-screen, not display:none -- execCommand('copy') needs this actually
-   laid out to select/copy it. White background/dark text so a paste
-   target (Slack, email, a doc) shows it correctly regardless of this
-   page's own dark theme. */
-.copy-source{position:absolute;left:-9999px;top:0;background:#fff;color:#111;padding:16px;font-family:Arial,sans-serif}
-/* Script-free fallback (see copy_picks_widget): the checked toggle pulls the
-   light table into view, one tap selects all of it, and the label reads
-   "Done" to put it away again. */
-.copy-toggle,.copy-close,.copy-hint{display:none}
+/* Copy (see copy_picks_widget): the picture stays hidden unless the button
+   falls back to showing it -- then it's the thing to right-click/long-press,
+   scaled down to fit a phone, and the label reads "Done" to put it away. */
+.copy-toggle,.copy-close,.copy-hint,.copy-png{display:none}
 .copy-hint{font:12px Arial,sans-serif;color:#aeb8c3}
 .copy-toggle:checked~.copy-picks .copy-open{display:none}
 .copy-toggle:checked~.copy-picks .copy-close,.copy-toggle:checked~.copy-picks .copy-hint{display:inline}
-.copy-toggle:checked~.copy-source{position:static;width:fit-content;max-width:100%;box-sizing:border-box;overflow-x:auto;margin:0 0 14px;-webkit-user-select:all;user-select:all}
-.copy-title{font-size:18px;font-weight:700;margin-bottom:2px}
-.copy-subtitle{font-size:13px;margin-bottom:10px;color:#444;font-family:Graduate,Georgia,serif}
+.copy-toggle:checked~.copy-png{display:block;max-width:100%;height:auto;margin:0 0 14px}
 .packet-bundle{align-content:flex-start;align-items:flex-start;box-sizing:border-box;padding:16px 20px}
 .packet-bundle::after{content:'';order:1;flex:0 0 100%;height:0}
 .packet-bundle .pkgtab-label,.packet-tabs a{padding:9px 18px;border:1px solid transparent;border-bottom:1px solid #393d42;border-radius:8px 8px 0 0;margin-bottom:0}
@@ -1020,103 +1013,171 @@ HIGH_CONFIDENCE_CUTOFFS = {
 
 
 def copy_picks_widget(season, week, light_table):
-    """A visible "Copy" button that puts a PNG of the picks table on the
-    clipboard -- paste it straight into a chat, email or doc as a picture.
-    The picture comes from an off-screen (laid out, just not visible)
-    white/dark-text copy of the table, titled "Model" / "{season} Week
-    {week}" in the NFL display font, so it reads right regardless of this
-    page's own dark theme. No library or server: PICKS_PNG_SCRIPT paints
-    that laid-out table onto a canvas itself. A short confirmation fades in
-    next to the button and back out over ~3s -- CSS animation, restarted via
-    a reflow trick so it still fires on a second click.
+    """A "Copy" button for a picture of the picks table (picks_png, drawn
+    in Python when the packet is built, so it exists no matter where the
+    file is opened). Clicking it puts that PNG on the clipboard where the
+    browser allows it -- paste straight into a chat, email or doc -- and a
+    short confirmation fades in next to the button (CSS animation, restarted
+    via a reflow trick so it still fires on a second click).
 
-    Fallbacks, in order: a browser that can't put images on the clipboard
-    gets the table copied as formatted text instead (the old behavior).
-    Where scripts don't run at all (phone file previews), nothing can write
-    to the clipboard -- CSS has no way to -- so the button is really a label
-    for a hidden checkbox: tapping it reveals the same light table in place,
-    and user-select:all makes one tap on it select the whole thing for the
-    phone's own Copy (or just screenshot it). When a script copy succeeds,
-    the click is cancelled before the checkbox flips."""
-    subtitle = escape(f'{int(season)} Week {int(week)}')
+    Everywhere else -- phone previews that run no scripts, browsers that
+    refuse clipboard images -- the button is really a label for a hidden
+    checkbox: it reveals the picture itself, which any browser lets you
+    right-click (desktop) or long-press (phone) to copy or save. When a
+    script copy succeeds, the click is cancelled before the checkbox flips."""
+    subtitle = f'{int(season)} Week {int(week)}'
+    png, width = picks_png(light_table, 'Model', subtitle)
     return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
-           '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksTable(event)">'
+           '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksImage(event)">'
            '<span class="copy-open">Copy</span><span class="copy-close">Done</span></label>'
-           '<span class="copy-hint">Tap the table to select it, then Copy</span>'
-           '<span id="copy-feedback" class="copy-feedback">Copied</span></div>'
-           f'<div id="picks-copy-source" class="copy-source"><div class="copy-title">Model</div>'
-           f'<div class="copy-subtitle">{subtitle}</div>{light_table}</div>'
-           f'<script>{PICKS_PNG_SCRIPT}</script>')
+           '<span class="copy-hint">Right-click (or long-press) the picture to copy it</span>'
+           '<span id="copy-feedback" class="copy-feedback">Copied as an image</span></div>'
+           f'<img id="picks-png" class="copy-png" width="{width}" alt="Model picks, {escape(subtitle)}" '
+           f'src="data:image/png;base64,{base64.b64encode(png).decode()}">'
+           f'<script>{PICKS_COPY_SCRIPT}</script>')
 
 
-# Browser side of copy_picks_widget. picksPng repaints the off-screen copy
-# table onto a canvas from its live layout -- backgrounds, then borders (a
-# collapsed border sits centered on the shared cell edge, and browsers paint
-# every cell background before any border), then logos and text at the exact
-# boxes the browser laid them out in -- so the picture matches the table
-# without re-implementing its layout. Rendered at 2x (or the screen's
-# density, if higher) so it stays sharp when pasted. The ClipboardItem gets
-# a Promise, created synchronously inside the click: Safari rejects one
-# built after an await.
-PICKS_PNG_SCRIPT = '''
-function copyFeedback(text){
- const feedback=document.getElementById("copy-feedback");feedback.textContent=text;
- feedback.classList.remove("show");void feedback.offsetWidth;feedback.classList.add("show");
-}
-function copyAsText(source){
- const range=document.createRange();range.selectNode(source);
- const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
- try{return document.execCommand("copy")}catch(error){return false}finally{selection.removeAllRanges()}
-}
-async function picksPng(source){
- await document.fonts.ready;
- const images=[...source.querySelectorAll("img")];
- await Promise.all(images.map(img=>img.decode().catch(()=>{})));
- const box=source.getBoundingClientRect(),scale=Math.max(2,window.devicePixelRatio||1);
- const canvas=document.createElement("canvas");
- canvas.width=Math.ceil(box.width*scale);canvas.height=Math.ceil(box.height*scale);
- const ctx=canvas.getContext("2d");ctx.scale(scale,scale);ctx.translate(-box.left,-box.top);
- const visible=color=>color&&color!=="transparent"&&!/^rgba\\(.*,\\s*0\\)$/.test(color);
- const elements=[source,...source.querySelectorAll("*")].map(el=>[el,getComputedStyle(el),el.getBoundingClientRect()]);
- for(const [el,s,r] of elements)if(visible(s.backgroundColor)){ctx.fillStyle=s.backgroundColor;ctx.fillRect(r.left,r.top,r.width,r.height)}
- for(const [el,s,r] of elements){
-  const collapsed=/^T[DH]$/.test(el.tagName)&&getComputedStyle(el.closest("table")).borderCollapse==="collapse";
-  for(const [side,x,y,horizontal] of [["Top",r.left,r.top,1],["Bottom",r.left,r.bottom,1],["Left",r.left,r.top,0],["Right",r.right,r.top,0]]){
-   const width=parseFloat(s["border"+side+"Width"]);
-   if(!width||s["border"+side+"Style"]==="none"||!visible(s["border"+side+"Color"]))continue;
-   const inset=collapsed?-width/2:(side==="Bottom"||side==="Right"?-width:0);
-   ctx.fillStyle=s["border"+side+"Color"];
-   if(horizontal)ctx.fillRect(x,y+inset,r.width,width);else ctx.fillRect(x+inset,y,width,r.height);
-  }
- }
- for(const img of images){const r=img.getBoundingClientRect();if(r.width)ctx.drawImage(img,r.left,r.top,r.width,r.height)}
- const walker=document.createTreeWalker(source,NodeFilter.SHOW_TEXT);
- for(let node;(node=walker.nextNode());){
-  const range=document.createRange();range.selectNodeContents(node);
-  const r=range.getBoundingClientRect(),s=getComputedStyle(node.parentElement);
-  const text=node.textContent.replace(/\\s+/g," ").trim();
-  if(!text||!r.width)continue;
-  ctx.font=s.fontStyle+" "+s.fontWeight+" "+s.fontSize+" "+s.fontFamily;
-  if("letterSpacing" in ctx)ctx.letterSpacing=s.letterSpacing==="normal"?"0px":s.letterSpacing;
-  ctx.fillStyle=s.color;ctx.textBaseline="alphabetic";
-  const shown=s.textTransform==="uppercase"?text.toUpperCase():text,m=ctx.measureText(shown);
-  const ascent=m.fontBoundingBoxAscent,descent=m.fontBoundingBoxDescent;
-  ctx.fillText(shown,r.left,ascent===undefined?r.top+r.height*0.8:r.top+(r.height-ascent-descent)/2+ascent);
- }
- return new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error("canvas export failed")),"image/png"));
-}
-function copyPicksTable(event){
+def picks_png(light_table, title, subtitle, scale=2):
+    """(PNG bytes, CSS width) of the picks table, drawn with Pillow from the
+    same light-theme Styler HTML headline_table(light=True) produces -- same
+    cells, gradient/highlight colors (read from the Styler's own <style>
+    rules) and logos -- following .headline-table-light's CSS: 12px text,
+    2px/6px padding, 1px #ddd grid, #f2f2f2 bold headers, Graduate 14px team
+    columns, right-aligned figures. Fonts ship with the repo (Graduate) and
+    with matplotlib (DejaVu Sans), so it renders the same on every OS.
+    Drawn at 2x and tagged 144 dpi so it stays sharp when pasted."""
+    from html.parser import HTMLParser
+    from matplotlib import font_manager
+    from PIL import Image, ImageDraw, ImageFont
+
+    class Cells(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows, self.cell, self.css, self.in_style = [], None, '', False
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == 'style':
+                self.in_style = True
+            elif tag == 'tr':
+                self.rows.append([])
+            elif tag in ('th', 'td'):
+                self.cell = dict(head=tag == 'th', id=attrs.get('id', ''), text='', logo=None)
+                self.rows[-1].append(self.cell)
+            elif tag == 'img' and self.cell is not None:
+                self.cell['logo'] = (attrs.get('alt') or '').removesuffix(' logo')
+
+        def handle_endtag(self, tag):
+            if tag == 'style':
+                self.in_style = False
+            elif tag in ('th', 'td'):
+                self.cell = None
+
+        def handle_data(self, data):
+            if self.in_style:
+                self.css += data
+            elif self.cell is not None:
+                self.cell['text'] += data
+
+    parsed = Cells()
+    parsed.feed(light_table)
+    # The Styler writes every data-dependent style (gradients, pick
+    # highlight) into its <style> block as "#cell_id, #cell_id {prop: value}".
+    styles = {}
+    for selectors, body in re.findall(r'([^{}]+)\{([^}]*)\}', parsed.css):
+        declarations = {k.strip(): v.strip() for k, v in (d.split(':', 1) for d in body.split(';') if ':' in d)}
+        for selector in selectors.split(','):
+            styles.setdefault(selector.strip().lstrip('#'), {}).update(declarations)
+
+    faces = dict(sans=font_manager.findfont(font_manager.FontProperties(family='DejaVu Sans')),
+                 bold=font_manager.findfont(font_manager.FontProperties(family='DejaVu Sans', weight='bold')),
+                 graduate=str(Path(__file__).parent / 'assets/fonts/Graduate-Regular.ttf'))
+    fonts = {}
+
+    def font(face, size):
+        if (face, size) not in fonts:
+            fonts[face, size] = ImageFont.truetype(faces[face], round(size * scale))
+        return fonts[face, size]
+
+    team_columns, right_columns = {3, 6}, {4, 5, 8, 9, 11, 12, 13, 14}  # 0-based; see headline_table's column order
+    rows = []
+    for row in (r for r in parsed.rows if r):
+        styled = []
+        for column, cell in enumerate(row):
+            rule = styles.get(cell['id'], {})
+            bold = cell['head'] or rule.get('font-weight') in ('600', '700', 'bold')
+            team = not cell['head'] and column in team_columns
+            size = 14 if team else 12
+            styled.append(dict(
+                cell, text=cell['text'].strip(), size=size,
+                # Graduate has one weight; browsers fake bold with a thicker stroke, so do the same.
+                font=font('graduate' if team else 'bold' if bold else 'sans', size), stroke=bold and team,
+                fill=rule.get('background-color', '#f2f2f2' if cell['head'] else '#ffffff'),
+                color=rule.get('color', '#222222'),
+                right=not cell['head'] and column in right_columns))
+        rows.append(styled)
+
+    pad_x, pad_y, grid, logo_px = 6 * scale, 2 * scale, scale, 16 * scale
+    columns = max(len(row) for row in rows)
+    widths = [0] * columns
+    for row in rows:
+        for column, cell in enumerate(row):
+            content = logo_px if cell['logo'] else cell['font'].getlength(cell['text'])
+            widths[column] = max(widths[column], int(content + 0.999) + 2 * pad_x)
+    heights = [max(max(round(cell['size'] * 1.25 * scale), logo_px if cell['logo'] else 0) for cell in row) + 2 * pad_y
+               for row in rows]
+
+    margin = 16 * scale
+    title_font, subtitle_font = font('bold', 18), font('graduate', 13)
+    title_h, subtitle_h = round(18 * 1.2 * scale), round(13 * 1.25 * scale)
+    table_top = margin + title_h + 2 * scale + subtitle_h + 10 * scale
+    table_w = sum(widths) + (columns + 1) * grid
+    table_h = sum(heights) + (len(rows) + 1) * grid
+    image = Image.new('RGB', (table_w + 2 * margin, table_top + table_h + margin), '#ffffff')
+    draw = ImageDraw.Draw(image)
+    draw.text((margin, margin + title_h / 2), title, font=title_font, fill='#111111', anchor='lm')
+    draw.text((margin, margin + title_h + 2 * scale + subtitle_h / 2), subtitle, font=subtitle_font, fill='#444444', anchor='lm')
+    # Grid color underneath, every cell painted inside it: 1px lines everywhere.
+    draw.rectangle([margin, table_top, margin + table_w - 1, table_top + table_h - 1], fill='#dddddd')
+    y = table_top + grid
+    for row, height in zip(rows, heights):
+        x = margin + grid
+        for column, cell in enumerate(row):
+            width = widths[column]
+            draw.rectangle([x, y, x + width - 1, y + height - 1], fill=cell['fill'])
+            middle = y + height / 2
+            encoded = logo_data(cell['logo']) if cell['logo'] else None
+            if encoded:
+                mark = Image.open(io.BytesIO(base64.b64decode(encoded))).convert('RGBA')
+                mark.thumbnail((logo_px, logo_px), Image.LANCZOS)
+                image.paste(mark, (round(x + (width - mark.width) / 2), round(middle - mark.height / 2)), mark)
+            elif cell['text']:
+                anchor, left = ('rm', x + width - pad_x) if cell['right'] else ('mm', x + width / 2)
+                draw.text((left, middle), cell['text'], font=cell['font'], fill=cell['color'], anchor=anchor,
+                          stroke_width=scale // 2 if cell['stroke'] else 0, stroke_fill=cell['color'])
+            x += width + grid
+        y += height + grid
+    buffer = io.BytesIO()
+    image.save(buffer, 'PNG', optimize=True, dpi=(72 * scale, 72 * scale))
+    return buffer.getvalue(), image.width // scale
+
+
+# Browser side of copy_picks_widget: the PNG is already on the page, so this
+# only hands its bytes to the clipboard -- built synchronously inside the
+# click (Safari refuses a clipboard write that starts after an await).
+# Anything that stops it (no ClipboardItem, a refused write) falls through
+# to the label's own checkbox and reveals the picture instead.
+PICKS_COPY_SCRIPT = '''
+function copyPicksImage(event){
  const toggle=document.getElementById("copy-picks-toggle");if(toggle.checked)return;
- const source=document.getElementById("picks-copy-source");if(!source)return;
- if(window.ClipboardItem&&navigator.clipboard&&navigator.clipboard.write){
-  event.preventDefault();
-  navigator.clipboard.write([new ClipboardItem({"image/png":picksPng(source)})]).then(
-   ()=>copyFeedback("Copied as an image"),
-   ()=>{if(copyAsText(source))copyFeedback("Copied as text");else toggle.checked=true});
-  return;
- }
- // No image clipboard here: copy formatted text, or let the checkbox reveal the table.
- if(copyAsText(source)){event.preventDefault();copyFeedback("Copied as text")}
+ if(!(window.ClipboardItem&&navigator.clipboard&&navigator.clipboard.write))return;
+ event.preventDefault();
+ const bytes=atob(document.getElementById("picks-png").src.split(",")[1]),data=new Uint8Array(bytes.length);
+ for(let i=0;i<bytes.length;i++)data[i]=bytes.charCodeAt(i);
+ navigator.clipboard.write([new ClipboardItem({"image/png":new Blob([data],{type:"image/png"})})]).then(()=>{
+  const feedback=document.getElementById("copy-feedback");
+  feedback.classList.remove("show");void feedback.offsetWidth;feedback.classList.add("show");
+ },()=>{toggle.checked=true});
 }
 '''
 
