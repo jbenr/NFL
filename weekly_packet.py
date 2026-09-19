@@ -1020,42 +1020,105 @@ HIGH_CONFIDENCE_CUTOFFS = {
 
 
 def copy_picks_widget(season, week, light_table):
-    """A visible "Copy" button plus an off-screen (not display:none --
-    document.execCommand('copy') needs the source actually laid out to
-    select it) white/dark-text copy of the picks table, titled "Model" /
-    "{season} Week {week}" (NFL display font, like everywhere else a
-    title/team shows up) -- so pasting into Slack/email/a doc looks right
-    regardless of this page's own dark theme, and the button itself works
-    with zero server round-trip (it's a fully static, possibly offline file).
-    A "Headline table copied" confirmation fades in next to the button and
-    back out over ~3s -- CSS animation, restarted via a reflow trick so it
-    still fires on a second click before the first fade finished.
+    """A visible "Copy" button that puts a PNG of the picks table on the
+    clipboard -- paste it straight into a chat, email or doc as a picture.
+    The picture comes from an off-screen (laid out, just not visible)
+    white/dark-text copy of the table, titled "Model" / "{season} Week
+    {week}" in the NFL display font, so it reads right regardless of this
+    page's own dark theme. No library or server: PICKS_PNG_SCRIPT paints
+    that laid-out table onto a canvas itself. A short confirmation fades in
+    next to the button and back out over ~3s -- CSS animation, restarted via
+    a reflow trick so it still fires on a second click.
 
-    Where scripts don't run (phone file previews), nothing can write to the
-    clipboard -- CSS has no way to -- so the button is really a label for a
-    hidden checkbox: tapping it reveals the same light table in place, and
-    user-select:all makes one tap on it select the whole thing for the
-    phone's own Copy. When scripts do run and the copy succeeds, the click
-    is cancelled before the checkbox flips, so desktop behaves as before."""
+    Fallbacks, in order: a browser that can't put images on the clipboard
+    gets the table copied as formatted text instead (the old behavior).
+    Where scripts don't run at all (phone file previews), nothing can write
+    to the clipboard -- CSS has no way to -- so the button is really a label
+    for a hidden checkbox: tapping it reveals the same light table in place,
+    and user-select:all makes one tap on it select the whole thing for the
+    phone's own Copy (or just screenshot it). When a script copy succeeds,
+    the click is cancelled before the checkbox flips."""
     subtitle = escape(f'{int(season)} Week {int(week)}')
     return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
            '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksTable(event)">'
            '<span class="copy-open">Copy</span><span class="copy-close">Done</span></label>'
            '<span class="copy-hint">Tap the table to select it, then Copy</span>'
-           '<span id="copy-feedback" class="copy-feedback">Headline table copied</span></div>'
+           '<span id="copy-feedback" class="copy-feedback">Copied</span></div>'
            f'<div id="picks-copy-source" class="copy-source"><div class="copy-title">Model</div>'
            f'<div class="copy-subtitle">{subtitle}</div>{light_table}</div>'
-           '<script>function copyPicksTable(event){'
-           'const toggle=document.getElementById("copy-picks-toggle");if(toggle.checked)return;'
-           'const source=document.getElementById("picks-copy-source");if(!source)return;'
-           'const range=document.createRange();range.selectNode(source);'
-           'const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);'
-           'let copied=false;try{copied=document.execCommand("copy")}catch(error){}finally{selection.removeAllRanges()}'
-           # Copy blocked (some in-app browsers): let the checkbox reveal the table instead.
-           'if(!copied)return;event.preventDefault();'
-           'const feedback=document.getElementById("copy-feedback");'
-           'feedback.classList.remove("show");void feedback.offsetWidth;feedback.classList.add("show");'
-           '}</script>')
+           f'<script>{PICKS_PNG_SCRIPT}</script>')
+
+
+# Browser side of copy_picks_widget. picksPng repaints the off-screen copy
+# table onto a canvas from its live layout -- backgrounds, then borders (a
+# collapsed border sits centered on the shared cell edge, and browsers paint
+# every cell background before any border), then logos and text at the exact
+# boxes the browser laid them out in -- so the picture matches the table
+# without re-implementing its layout. Rendered at 2x (or the screen's
+# density, if higher) so it stays sharp when pasted. The ClipboardItem gets
+# a Promise, created synchronously inside the click: Safari rejects one
+# built after an await.
+PICKS_PNG_SCRIPT = '''
+function copyFeedback(text){
+ const feedback=document.getElementById("copy-feedback");feedback.textContent=text;
+ feedback.classList.remove("show");void feedback.offsetWidth;feedback.classList.add("show");
+}
+function copyAsText(source){
+ const range=document.createRange();range.selectNode(source);
+ const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+ try{return document.execCommand("copy")}catch(error){return false}finally{selection.removeAllRanges()}
+}
+async function picksPng(source){
+ await document.fonts.ready;
+ const images=[...source.querySelectorAll("img")];
+ await Promise.all(images.map(img=>img.decode().catch(()=>{})));
+ const box=source.getBoundingClientRect(),scale=Math.max(2,window.devicePixelRatio||1);
+ const canvas=document.createElement("canvas");
+ canvas.width=Math.ceil(box.width*scale);canvas.height=Math.ceil(box.height*scale);
+ const ctx=canvas.getContext("2d");ctx.scale(scale,scale);ctx.translate(-box.left,-box.top);
+ const visible=color=>color&&color!=="transparent"&&!/^rgba\\(.*,\\s*0\\)$/.test(color);
+ const elements=[source,...source.querySelectorAll("*")].map(el=>[el,getComputedStyle(el),el.getBoundingClientRect()]);
+ for(const [el,s,r] of elements)if(visible(s.backgroundColor)){ctx.fillStyle=s.backgroundColor;ctx.fillRect(r.left,r.top,r.width,r.height)}
+ for(const [el,s,r] of elements){
+  const collapsed=/^T[DH]$/.test(el.tagName)&&getComputedStyle(el.closest("table")).borderCollapse==="collapse";
+  for(const [side,x,y,horizontal] of [["Top",r.left,r.top,1],["Bottom",r.left,r.bottom,1],["Left",r.left,r.top,0],["Right",r.right,r.top,0]]){
+   const width=parseFloat(s["border"+side+"Width"]);
+   if(!width||s["border"+side+"Style"]==="none"||!visible(s["border"+side+"Color"]))continue;
+   const inset=collapsed?-width/2:(side==="Bottom"||side==="Right"?-width:0);
+   ctx.fillStyle=s["border"+side+"Color"];
+   if(horizontal)ctx.fillRect(x,y+inset,r.width,width);else ctx.fillRect(x+inset,y,width,r.height);
+  }
+ }
+ for(const img of images){const r=img.getBoundingClientRect();if(r.width)ctx.drawImage(img,r.left,r.top,r.width,r.height)}
+ const walker=document.createTreeWalker(source,NodeFilter.SHOW_TEXT);
+ for(let node;(node=walker.nextNode());){
+  const range=document.createRange();range.selectNodeContents(node);
+  const r=range.getBoundingClientRect(),s=getComputedStyle(node.parentElement);
+  const text=node.textContent.replace(/\\s+/g," ").trim();
+  if(!text||!r.width)continue;
+  ctx.font=s.fontStyle+" "+s.fontWeight+" "+s.fontSize+" "+s.fontFamily;
+  if("letterSpacing" in ctx)ctx.letterSpacing=s.letterSpacing==="normal"?"0px":s.letterSpacing;
+  ctx.fillStyle=s.color;ctx.textBaseline="alphabetic";
+  const shown=s.textTransform==="uppercase"?text.toUpperCase():text,m=ctx.measureText(shown);
+  const ascent=m.fontBoundingBoxAscent,descent=m.fontBoundingBoxDescent;
+  ctx.fillText(shown,r.left,ascent===undefined?r.top+r.height*0.8:r.top+(r.height-ascent-descent)/2+ascent);
+ }
+ return new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error("canvas export failed")),"image/png"));
+}
+function copyPicksTable(event){
+ const toggle=document.getElementById("copy-picks-toggle");if(toggle.checked)return;
+ const source=document.getElementById("picks-copy-source");if(!source)return;
+ if(window.ClipboardItem&&navigator.clipboard&&navigator.clipboard.write){
+  event.preventDefault();
+  navigator.clipboard.write([new ClipboardItem({"image/png":picksPng(source)})]).then(
+   ()=>copyFeedback("Copied as an image"),
+   ()=>{if(copyAsText(source))copyFeedback("Copied as text");else toggle.checked=true});
+  return;
+ }
+ // No image clipboard here: copy formatted text, or let the checkbox reveal the table.
+ if(copyAsText(source)){event.preventDefault();copyFeedback("Copied as text")}
+}
+'''
 
 
 def headline_table(folder, light=False):
