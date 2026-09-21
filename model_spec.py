@@ -120,11 +120,17 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
             'members': f'{iterations} independently trained networks (seeds {seed} to {seed + iterations - 1})',
         },
         'picks': {
-            'spread': f'edge >= {cutoffs["spread"]["diff_cutoff"]:g} points and SD <= {cutoffs["spread"]["sd_cutoff"]:.2f}',
-            'total': f'edge >= {cutoffs["total"]["diff_cutoff"]:g} points and SD <= {cutoffs["total"]["sd_cutoff"]:.2f}',
-            'provenance': ('cutoffs were calibrated on the 2024 two-sided backtest and checked on 2025 '
-                           '(data/bt/two_sided). Those backtests used the "steep" recency preset and 7 weather inputs, '
-                           f'so they have not been re-validated for {LABEL}.'),
+            **{market: f'edge >= {rule["diff_cutoff"]:g} points'
+                       + (f' and SD <= {rule["sd_cutoff"]:.2f}' if rule.get('sd_cutoff') else ' (no SD condition)')
+               for market, rule in cutoffs.items()},
+            'provenance': (f'checked on {LABEL}\'s own backtest (data/bt/model_2.0/2020-2025: 1693 games, six '
+                           'seasons). Totals at edge >= 5 won 54.7% of 522 bets (+5.2% roi), at or above 51% every '
+                           'season; the old SD condition made it worse and was dropped. No spread rule held up: the '
+                           'old 5.0/4.83 cutoff went 50.6% (-2.7%) and a 1230-rule search found nothing that survived '
+                           'out of sample. Both markets improve markedly from week 13 on (spread edge >= 3: 55.7%; '
+                           'total edge >= 5: 58.5%), which is not yet built into the rules above. Break-even is 52.4%, '
+                           'and none of these intervals exclude zero by a comfortable margin -- treat picks as '
+                           'experimental.'),
         },
         'attributions': {
             'method': 'integrated gradients (64 steps), per member, averaged across the ensemble',

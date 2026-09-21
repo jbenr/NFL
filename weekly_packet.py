@@ -143,7 +143,7 @@ details.matchup{position:relative}
 /* .headline-table-light: the white/dark-text look of the "Copy" picture.
    The table itself isn't on the page -- picks_png() draws the picture from
    its HTML following these rules, so change both together. */
-.headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Arial,sans-serif;width:100%}
+.headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Graduate,Georgia,serif;width:100%}
 .headline-table-light th,.headline-table-light td{padding:2px 6px;border:1px solid #ddd;text-align:center;line-height:1.25;white-space:nowrap}
 .headline-table-light th{background:#f2f2f2;font-weight:600}
 .headline-table-light img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
@@ -152,8 +152,8 @@ details.matchup{position:relative}
    instead of sitting dead-center; logo/date/team/pick columns stay
    centered. nth-child indices: 5,6=spread's line/model, 9,10=diff/sd,
    12,13=total's line/model, 14,15=total's diff/sd. */
-.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(9),.headline-table-light td:nth-child(10),
-.headline-table-light td:nth-child(12),.headline-table-light td:nth-child(13),.headline-table-light td:nth-child(14),.headline-table-light td:nth-child(15){text-align:right}
+.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(9),
+.headline-table-light td:nth-child(11),.headline-table-light td:nth-child(12),.headline-table-light td:nth-child(13){text-align:right}
 main.headline-shell{overflow-x:auto}
 .context-row{margin:12px 0}.context-value{font-size:12px;line-height:1.35;overflow-wrap:anywhere;color:#ccc}
 .context-value:last-child{text-align:right}.matchup-head{font-size:15px}
@@ -203,7 +203,9 @@ main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
 .spec-list dt{color:#9ba8b5}.spec-list dd{margin:0;overflow-wrap:anywhere}.spec-list .spec-list{grid-template-columns:minmax(110px,170px) minmax(0,1fr)}
 .spec-list ul{margin:0;padding-left:18px}
 @media(max-width:650px){.spec-list,.spec-list .spec-list{grid-template-columns:1fr;gap:2px}.spec-list dd{margin-bottom:8px}}
-.headline-table,.stats-table{background:#111;color:#e3e6e9;font:12px/1.25 Arial,sans-serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
+.stats-table{background:#111;color:#e3e6e9;font:12px/1.25 Arial,sans-serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
+/* The headline sheet is all NFL font, headers and figures included. */
+.headline-table{background:#111;color:#e3e6e9;font:13px/1.25 Graduate,Georgia,serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
 .headline-table{width:100%}
 /* Stats tables size to their own content (3-6 columns of team/value data)
    instead of stretching full-width. */
@@ -221,6 +223,13 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .packet .stats-table td{line-height:20px}.stats-table td img{vertical-align:top}
 .stats-table tbody tr:hover td{background:#1d2126}
 .packet .headline-table th{padding:7px 8px}
+/* Confidence key, bottom right under the sheet (tier_legend). */
+.tier-legend{display:flex;flex-direction:column;align-items:flex-end;gap:3px;margin:10px 0 0;font:11px Arial,sans-serif;color:#b7c0c9;text-align:right}
+.tier-legend strong{font:12px Graduate,Georgia,serif;color:#e3e6e9}
+.tier-key{display:flex;align-items:center;gap:6px}
+.tier-key i{display:inline-block;width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+.tier-note{color:#8e99a5}
+@media(max-width:650px){.tier-legend{align-items:flex-start;text-align:left}}
 .packet .headline-table td{padding:3px 8px}
 /* Every stats table formatted the same tight way (this used to be QB
    Elo-only, leaving the others visibly looser/wider) -- small logos,
@@ -233,8 +242,8 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .stats-table img{height:20px;width:22px;object-fit:contain;vertical-align:middle}
 .headline-table td:nth-child(4),.headline-table td:nth-child(7),
 .headline-table-light td:nth-child(4),.headline-table-light td:nth-child(7){font-family:Graduate,Georgia,serif;font-size:14px}
-.headline-table td:nth-child(5),.headline-table td:nth-child(6),.headline-table td:nth-child(9),.headline-table td:nth-child(10),
-.headline-table td:nth-child(12),.headline-table td:nth-child(13),.headline-table td:nth-child(14),.headline-table td:nth-child(15){text-align:right}
+.headline-table td:nth-child(5),.headline-table td:nth-child(6),.headline-table td:nth-child(9),
+.headline-table td:nth-child(11),.headline-table td:nth-child(12),.headline-table td:nth-child(13){text-align:right}
 .stats-table .rank{font-size:10px;line-height:1;color:#aab2bc;margin-left:6px}
 .stats-table td:first-child,.stats-table th:first-child{text-align:left}
 .sort-radio{display:none}
@@ -278,7 +287,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 #stats-mode-raw:checked~#stats-view-raw{display:block}
 #stats-mode-model:checked~#stats-view-model{display:block}
 .banner-team .team-copy{display:flex;flex-direction:column}.banner-qb{font:11px/1.4 Arial,sans-serif;color:#aaa;white-space:normal;margin-top:4px}
-.packet .pill.pick{background:#ffe590;color:#222}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
+.packet .pill.pick{background:#ffe590;color:#222}.pill.pick.tier-S{background:#e3c4ff}.pill.pick.tier-A{background:#b9e4c4}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
 .sheet-notes p{font-size:13px;line-height:1.5;color:#c8cdd3;margin:10px 0}.sheet-notes strong{color:#eee}
 .pick-header{overflow-x:auto;border-bottom:1px solid #333;padding:10px 0 16px;margin-bottom:12px}
 .pick-grid{display:grid;grid-template-columns:160px repeat(5,minmax(60px,1fr)) 160px;min-width:700px;align-items:center;gap:6px 8px;text-align:center;font-variant-numeric:tabular-nums}
@@ -929,7 +938,11 @@ def game_header(row, market, action):
     headings = ['Away', 'MarketLine' if market == 'spread' else 'Market O/U',
                 'ModelLine' if market == 'spread' else 'Model O/U', 'Edge', 'SD', 'PICK', 'Home']
     labels = ''.join(f'<div class="pick-label">{h}</div>' for h in headings)
-    pick = '–' if action == 'PASS' else f'<span class="pill pick">{escape(action)}</span>'
+    if action == 'PASS':
+        pick = '–'
+    else:
+        tier = pick_tier(market, row.week, row.get('total_game_importance'))
+        pick = f'<span class="pill pick tier-{tier}" title="{escape(tier)} confidence">{escape(action)}</span>'
     scores = ''
     if pd.notna(row.get('away_points')) and pd.notna(row.get('home_points')):
         # Three cells (label | score | spacer) so the score itself sits dead
@@ -1053,21 +1066,70 @@ def bundle_single_file(folder):
     return out
 
 
-# Derived from your own two-sided backtests, not assumed: calibrated on
-# 2024 (data/bt/two_sided/2024), validated out-of-sample on 2025
-# (data/bt/two_sided/2025) via backtester.cutoff_grid on 2024, then
-# backtester.score with that exact cutoff replayed against 2025 --
-# see two_sided_diagnostics.py for the reusable version of this check.
-#   spread: diff>=5.0, sd<=4.83 -- 2024 calib 56.1% n=67 +5.16u ->
-#           2025 valid 57.1% n=57 +4.94u (held up, roi_95 still crosses 0)
-#   total:  diff>=4.0, sd<=4.43 -- 2024 calib 57.4% n=61 +5.74u ->
-#           2025 valid 61.2% n=49 +7.94u (held up better than calibration)
-# Two seasons is not a lot of validation data -- rebuild this as more
-# two-sided backtest seasons accumulate, don't treat it as permanent.
+# Checked on Model 2.0's own backtest (data/bt/model_2.0/2020-2025, 1693
+# games, six seasons) rather than the single 2024/2025 calibration these came
+# from under the previous model.
+#   total: edge >= 5, no SD condition -- 54.7% on 522 bets (+5.2% roi), at or
+#          above 51% in every one of the six seasons. The old SD <= 4.43
+#          condition made it worse, not better: totals with SD <= 4.0 won
+#          49.1% while SD >= 4.5 won 53.2%, so requiring low SD cut the rule
+#          to 53.2%. Its 95% roi interval still spans zero ([-2.6%, +13.0%])
+#          and the last two seasons are 53%/51%, i.e. break-even -- a mild
+#          preference, not a proven edge.
+#   spread: no rule held up. The old 5.0/4.83 cutoff went 50.6% (-2.7%) across
+#          the six seasons, and a search over 1230 rule variants produced
+#          nothing that survived out of sample -- the same search on shuffled
+#          outcomes averages +9% roi, so anything below that is luck. The
+#          model's disagreement with the spread market carries almost no
+#          information (b = +0.07, t = 1.1).
 HIGH_CONFIDENCE_CUTOFFS = {
-    'spread': dict(diff_cutoff=5.0, sd_cutoff=4.826863267174656),
-    'total': dict(diff_cutoff=4.0, sd_cutoff=4.429386074841524),
+    'spread': dict(diff_cutoff=3.0, sd_cutoff=None),
+    'total': dict(diff_cutoff=5.0, sd_cutoff=None),
 }
+
+
+# Confidence tiers, measured on Model 2.0's own backtest
+# (data/bt/model_2.0/2020-2025: 1693 games, six seasons; break-even is 52.4%).
+# A pick has to clear its market's edge first; the tier then says how much the
+# same rule has been worth historically, which depends mostly on how late in
+# the season it is -- by week 13 the 20-week lookback is almost entirely
+# current-season football, while in September it is mostly last season.
+#   spread  S: week >= 13 and game importance >= 0.65 -- 62.5% of 115, +19.2%,
+#              above break-even in all six seasons
+#           A: week >= 11 -- 52.3% of 314, +0.6%
+#           B: weeks 1-10 -- 49.1% of 447, -5.5% (shown, but no historical edge)
+#   total   S: week >= 13 -- 58.5% of 189, +12.2%, six of six seasons
+#           A: weeks 11-12 -- 53.5% of 43, +3.6%
+#           B: weeks 1-10 -- 52.4% of 290, +1.0% (break-even)
+PICK_TIERS = {
+    'spread': dict(edge=3.0, tiers=[('S', dict(week=13, importance=0.65)), ('A', dict(week=11)), ('B', {})]),
+    'total': dict(edge=5.0, tiers=[('S', dict(week=13)), ('A', dict(week=11)), ('B', {})]),
+}
+TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
+TIER_RECORD = {
+    'spread': {'S': 'week 13+ - important game', 'A': 'week 11+', 'B': 'weeks 1-10 - no historical edge'},
+    'total': {'S': 'week 13+', 'A': 'week 11-12', 'B': 'weeks 1-10 - break-even'},
+}
+TIER_HISTORY = {'spread': {'S': '62.5% (n=115)', 'A': '52.3% (n=314)', 'B': '49.1% (n=447)'},
+                'total': {'S': '58.5% (n=189)', 'A': '53.5% (n=43)', 'B': '52.4% (n=290)'}}
+
+
+def pick_tier(market, week, importance):
+    """S, A or B for a qualifying pick -- see PICK_TIERS."""
+    for name, rule in PICK_TIERS[market]['tiers']:
+        if int(week) >= rule.get('week', 0) and float(importance or 0) >= rule.get('importance', 0):
+            return name
+    return 'B'
+
+
+def tier_legend(markets=('spread', 'total')):
+    """The small colour key in the corner of the sheet."""
+    items = ''.join(
+        f'<span class="tier-key"><i style="background:{TIER_COLORS[tier]}"></i>{escape(tier)} '
+        + escape(' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}' for market in markets))
+        + '</span>' for tier in ['S', 'A', 'B'])
+    return (f'<div class="tier-legend"><strong>Confidence</strong>{items}'
+            '<span class="tier-note">Hit rates are from the 2020-2025 backtest; break-even is 52.4%.</span></div>')
 
 
 def copy_picks_widget(season, week, light_table):
@@ -1084,7 +1146,9 @@ def copy_picks_widget(season, week, light_table):
     right-click (desktop) or long-press (phone) to copy or save. When a
     script copy succeeds, the click is cancelled before the checkbox flips."""
     subtitle = f'{int(season)} Week {int(week)}'
-    png, width = picks_png(light_table, 'Model', subtitle)
+    legend = [(TIER_COLORS[tier], f'{tier}  ' + ' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}'
+                                                            for market in ['spread', 'total'])) for tier in ['S', 'A', 'B']]
+    png, width = picks_png(light_table, 'Model', subtitle, legend=legend)
     return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
            '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksImage(event)">'
            '<span class="copy-open">Copy</span><span class="copy-close">Done</span></label>'
@@ -1095,13 +1159,13 @@ def copy_picks_widget(season, week, light_table):
            f'<script>{PICKS_COPY_SCRIPT}</script>')
 
 
-def picks_png(light_table, title, subtitle, scale=2):
+def picks_png(light_table, title, subtitle, legend=(), scale=2):
     """(PNG bytes, CSS width) of the picks table, drawn with Pillow from the
     same light-theme Styler HTML headline_table(light=True) produces -- same
-    cells, gradient/highlight colors (read from the Styler's own <style>
-    rules) and logos -- following .headline-table-light's CSS: 12px text,
-    2px/6px padding, 1px #ddd grid, #f2f2f2 bold headers, Graduate 14px team
-    columns, right-aligned figures. Fonts ship with the repo (Graduate) and
+    cells, gradient/tier colors (read from the Styler's own <style> rules)
+    and logos -- following .headline-table-light's CSS: Graduate 12px (14px
+    team columns), 2px/6px padding, 1px #ddd grid, #f2f2f2 headers,
+    right-aligned figures -- then the confidence key underneath. Fonts ship with the repo (Graduate) and
     with matplotlib (DejaVu Sans), so it renders the same on every OS.
     Drawn at 2x and tagged 144 dpi so it stays sharp when pasted."""
     from html.parser import HTMLParser
@@ -1157,7 +1221,7 @@ def picks_png(light_table, title, subtitle, scale=2):
             fonts[face, size] = ImageFont.truetype(faces[face], round(size * scale))
         return fonts[face, size]
 
-    team_columns, right_columns = {3, 6}, {4, 5, 8, 9, 11, 12, 13, 14}  # 0-based; see headline_table's column order
+    team_columns, right_columns = {3, 6}, {4, 5, 8, 10, 11, 12}  # 0-based; see headline_table's column order
     rows = []
     for row in (r for r in parsed.rows if r):
         styled = []
@@ -1168,8 +1232,9 @@ def picks_png(light_table, title, subtitle, scale=2):
             size = 14 if team else 12
             styled.append(dict(
                 cell, text=cell['text'].strip(), size=size,
-                # Graduate has one weight; browsers fake bold with a thicker stroke, so do the same.
-                font=font('graduate' if team else 'bold' if bold else 'sans', size), stroke=bold and team,
+                # The whole sheet is Graduate, which has one weight -- browsers
+                # fake bold with a thicker stroke, so do the same here.
+                font=font('graduate', size), stroke=bold,
                 fill=rule.get('background-color', '#f2f2f2' if cell['head'] else '#ffffff'),
                 color=rule.get('color', '#222222'),
                 right=not cell['head'] and column in right_columns))
@@ -1186,12 +1251,17 @@ def picks_png(light_table, title, subtitle, scale=2):
                for row in rows]
 
     margin = 16 * scale
+    legend_font = font('sans', 9)
     title_font, subtitle_font = font('bold', 18), font('graduate', 13)
     title_h, subtitle_h = round(18 * 1.2 * scale), round(13 * 1.25 * scale)
     table_top = margin + title_h + 2 * scale + subtitle_h + 10 * scale
     table_w = sum(widths) + (columns + 1) * grid
     table_h = sum(heights) + (len(rows) + 1) * grid
-    image = Image.new('RGB', (table_w + 2 * margin, table_top + table_h + margin), '#ffffff')
+    swatch, gap, line_gap = 8 * scale, 6 * scale, round(13 * scale)
+    legend_w = max([legend_font.getlength(text) + swatch + gap for _, text in legend] or [0])
+    legend_h = (len(legend) * line_gap + 8 * scale) if legend else 0
+    image = Image.new('RGB', (round(max(table_w, legend_w)) + 2 * margin,
+                              table_top + table_h + legend_h + margin), '#ffffff')
     draw = ImageDraw.Draw(image)
     draw.text((margin, margin + title_h / 2), title, font=title_font, fill='#111111', anchor='lm')
     draw.text((margin, margin + title_h + 2 * scale + subtitle_h / 2), subtitle, font=subtitle_font, fill='#444444', anchor='lm')
@@ -1215,6 +1285,15 @@ def picks_png(light_table, title, subtitle, scale=2):
                           stroke_width=scale // 2 if cell['stroke'] else 0, stroke_fill=cell['color'])
             x += width + grid
         y += height + grid
+    # Confidence key under the table, right-aligned like the page's own.
+    right = margin + max(table_w, legend_w)
+    y = table_top + table_h + 8 * scale
+    for color, text in legend:
+        width = legend_font.getlength(text)
+        box = right - width - swatch - gap
+        draw.rectangle([box, y + 2 * scale, box + swatch, y + 2 * scale + swatch], fill=color, outline='#cccccc')
+        draw.text((right, y), text, font=legend_font, fill='#444444', anchor='ra')
+        y += line_gap
     buffer = io.BytesIO()
     image.save(buffer, 'PNG', optimize=True, dpi=(72 * scale, 72 * scale))
     return buffer.getvalue(), image.width // scale
@@ -1303,13 +1382,18 @@ def headline_table(folder, light=False):
             away_logo=g.away_team, away_team=g.away_team,
             spread=spread['line'], prediction=spread['model'],
             home_team=g.home_team, home_logo=g.home_team,
-            diff=spread['diff'], sd=spread['sd'], pick=spread['pick'],
+            diff=spread['diff'], pick=spread['pick'],
             total=total['line'], total_prediction=total['model'],
-            total_diff=total['diff'], total_sd=total['sd'], total_pick=total['pick']))
+            total_diff=total['diff'], total_pick=total['pick'],
+            spread_tier=pick_tier('spread', g.week, g.get('total_game_importance')) if spread_pick else '',
+            total_tier=pick_tier('total', g.week, g.get('total_game_importance')) if total_pick else ''))
     table = pd.DataFrame(rows)
     table['gameday'] = pd.to_datetime(table.gameday)
     table['gametime'] = pd.to_datetime(table.gametime, format='%H:%M', errors='coerce').dt.time
     table = table.sort_values(['gameday', 'gametime', 'away_team']).reset_index(drop=True)
+    # Tiers ride along for the sort, then step out of the displayed frame.
+    tiers = table[['spread_tier', 'total_tier']]
+    table = table.drop(columns=['spread_tier', 'total_tier'])
 
     def signed(value, precision=1):
         return '—' if pd.isna(value) else f'{value:+.{precision}f}'
@@ -1317,8 +1401,18 @@ def headline_table(folder, light=False):
     def plain(value, precision=1):
         return '—' if pd.isna(value) else f'{value:.{precision}f}'
 
-    def highlight_picks(value):
-        return 'background-color: #ffe590; color: #222; font-weight: 600' if value in picks else ''
+    def tier_styles(frame):
+        """Colour each pick cell (and the picked team) by its confidence tier."""
+        styles = pd.DataFrame('', index=frame.index, columns=frame.columns)
+        for i, row in frame.iterrows():
+            for column, tier in [('pick', tiers.spread_tier[i]), ('total_pick', tiers.total_tier[i])]:
+                if not tier:
+                    continue
+                paint = f'background-color: {TIER_COLORS[tier]}; color: #222; font-weight: 600'
+                styles.loc[i, column] = paint
+                if column == 'pick' and row['pick'] in (row.away_team, row.home_team):
+                    styles.loc[i, 'away_team' if row['pick'] == row.away_team else 'home_team'] = paint
+        return styles
 
     def team_cell(code):
         return escape(code)
@@ -1334,21 +1428,22 @@ def headline_table(folder, light=False):
     # Column order is fixed and documented here (also relied on by the
     # .headline-table nth-child CSS that right-aligns the numeric columns):
     # gameday/gametime/away_logo/away_team/spread/prediction/home_team/
-    # home_logo/diff/sd/pick, then O/U's total/total_prediction/total_diff/
-    # total_sd/total_pick appended in the same flat style. relabel_index
+    # home_logo/diff/pick, then O/U's total/total_prediction/total_diff/
+    # total_pick. No SD column in either market -- the pick's tier colour
+    # (PICK_TIERS) is the confidence signal now. relabel_index
     # only changes the displayed header text -- .format()/.map() below
     # still key off the real column names. background_gradient/
     # highlight_picks need per-cell inline styles since they're data-dependent.
     # write_packets() calls this once per market (spread, then total) -- on
     # the first (spread) call, total_details.csv doesn't exist yet, so
-    # total_diff/total_sd are entirely NaN for that pass (harmlessly
+    # total_diff is entirely NaN for that pass (harmlessly
     # overwritten once the second call has both files). background_gradient
     # over an all-NaN column makes pandas call np.nanmin/nanmax on nothing,
     # which is a real (if harmless) numpy RuntimeWarning -- skip gradients
     # for whichever of these columns are actually all-NaN instead of
     # letting that warning fire every single run.
     gradient_diff = [c for c in ['diff', 'total_diff'] if table[c].notna().any()]
-    gradient_sd = [c for c in ['sd', 'total_sd'] if table[c].notna().any()]
+    gradient_sd = []  # SD is no longer a column: the tier colour carries confidence
     css_class = 'headline-table-light' if light else 'headline-table'
     styled = table.style.hide(axis='index').set_table_attributes(f'class="{css_class}"')
     if gradient_diff:
@@ -1358,15 +1453,15 @@ def headline_table(folder, light=False):
     styled = (styled.format({
                  'gameday': lambda x: x.strftime('%a %m/%d'),
                  'gametime': lambda x: x.strftime('%I:%M %p').lstrip('0') if x else '—',
-                 'spread': signed, 'prediction': signed, 'diff': plain, 'sd': plain,
-                 'total': plain, 'total_prediction': plain, 'total_diff': plain, 'total_sd': plain,
+                 'spread': signed, 'prediction': signed, 'diff': plain,
+                 'total': plain, 'total_prediction': plain, 'total_diff': plain,
                  'away_logo': lambda x: logo(x), 'home_logo': lambda x: logo(x),
                  'away_team': team_cell, 'home_team': team_cell,
              })
-             .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'SD', 'Picks',
-                             'O/U', 'Model', 'Diff', 'SD', 'Picks'], axis=1)
-             .map(highlight_picks, subset=['away_team', 'home_team', 'pick', 'total_pick']))
-    return styled.to_html()
+             .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'Picks',
+                             'O/U', 'Model', 'Diff', 'Picks'], axis=1)
+             .apply(tier_styles, axis=None))
+    return styled.to_html() + tier_legend()
 
 
 def write_packets(predictions, panel, importance, config, root):
@@ -1421,9 +1516,15 @@ def write_packets(predictions, panel, importance, config, root):
         # model families get the generic version.
         spread_page = market == 'spread'
         notes = [
-            ('Picks', f'A pick needs an edge of at least {cutoffs["diff_cutoff"]:g} points and an SD of at most '
-                      f'{cutoffs["sd_cutoff"]:.2f}; otherwise PICK shows –. Lines are stored market lines, not live '
-                      'odds, and starting QBs aren’t verified.'),
+            # An SD condition is optional per market; neither uses one now.
+            ('Picks', 'A pick needs an edge of at least '
+                      + (f'{cutoffs["diff_cutoff"]:g} points'
+                         + (f' and an SD of at most {cutoffs["sd_cutoff"]:.2f}' if cutoffs.get('sd_cutoff') else ''))
+                      + '; otherwise PICK shows –. Its colour is the confidence tier: '
+                      + ', '.join(f'{tier} = {TIER_RECORD[market][tier]}, {TIER_HISTORY[market][tier]} in the backtest'
+                                  for tier in ['S', 'A', 'B'])
+                      + '. Break-even is 52.4%. Lines are stored market lines, not live odds, and starting QBs '
+                        'aren’t verified.'),
             ('Numbers', f'{"ModelLine" if spread_page else "Model O/U"} and the predicted scores are averages across the '
                         'model’s ensemble; SD is how much its runs disagree, not game risk. QB Elo is the scheduled '
                         f'starter’s recency-weighted rating going into the game. Stat ranks use pregame rates over the previous {config["lookback"]} '
@@ -1681,6 +1782,9 @@ if __name__ == '__main__':
                              'anything (neural packets only -- two-sided packets no longer keep the CSVs it needs)')
     parser.add_argument('--lookback', type=int, default=20)
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided only: training REG weeks')
+    parser.add_argument('--calculation', default='weighted',
+                        help="Stat recency preset (data_crunchski_2.DECAY_PRESETS): 'weighted' (default), "
+                             "'steep', or 'carryover' (weighted, with earlier-season games counted half)")
     parser.add_argument('--iterations', type=int, default=100)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--seed', type=int, default=1337)
@@ -1701,6 +1805,7 @@ if __name__ == '__main__':
         if args.model != 'neural':
             from shared_scoring import two_sided_packet
             two_sided_packet(args.season, args.week, args.lookback, args.train_window, args.iterations,
-                             args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file)
+                             args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file,
+                             calc=args.calculation)
         else:
             neural_packet(args.season, args.week, args.lookback, args.iterations, args.seed)

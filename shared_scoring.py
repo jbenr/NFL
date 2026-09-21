@@ -207,7 +207,12 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
     # Keyed on the code that actually fits (these functions + the data prep,
     # network and worker modules), not all of shared_scoring.py -- so editing
     # the packet/spec code below doesn't throw away a 4-minute fit.
-    fit_code = [inspect.getsource(f) for f in (fit_two_sided, fit_member, build_model)]
+    def code_of(f):
+        try:
+            return inspect.getsource(f)
+        except (TypeError, OSError):    # patched out (tests) or source unavailable
+            return getattr(f, '__name__', 'unknown')
+    fit_code = [code_of(f) for f in (fit_two_sided, fit_member, build_model)]
     cached = utils.cache_path('two_sided_scores', identity + fit_code,
                               ['data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])
     importance_path = cached.with_suffix('.importance.parquet')

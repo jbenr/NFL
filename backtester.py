@@ -564,6 +564,9 @@ def two_sided_season(args):
         output_root = 'two_sided'
     else:
         raise ValueError(f'Unknown two-sided model version: {model_version}')
+    # An explicit --calculation overrides the version's default preset; it
+    # lands in config, so a sweep gets its own run folder and cache entries.
+    calculation = getattr(args, 'calculation', None) or calculation
     if args.lookback < 1 or args.train_window < 1 or args.iterations < 2 or args.jobs < 1 or args.epochs < 1:
         raise ValueError('Lookback, training window, workers and epochs must be positive; members >= 2')
     weather_file = Path(args.weather_file or 'data/weather/historical_features.parquet')
@@ -666,6 +669,10 @@ if __name__ == '__main__':
     parser.add_argument('--model', choices=['shared', 'joint', 'two-sided'], default='shared')
     parser.add_argument('--model-version', choices=['legacy', 'model_2.0'], default='legacy',
                         help='Two-sided: legacy steep experiment or current Model 2.0 weighted production settings')
+    parser.add_argument('--calculation', choices=list(dc.DECAY_PRESETS), default=None,
+                        help="Stat recency preset. Default: whatever the model version uses ('weighted' for "
+                             "model_2.0, 'steep' for legacy). 'carryover' is 'weighted' with games from an "
+                             "earlier season counted half -- the September-staleness experiment.")
     parser.add_argument('--lookback', type=int, default=20, help='Two-sided experiment stat lookback')
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided experiment training REG weeks')
     parser.add_argument('--epochs', type=int, default=100)
@@ -717,9 +724,11 @@ if __name__ == '__main__':
         if set_but_unused:
             parser.error(f'{", ".join(set_but_unused)} have no effect on --model two-sided.')
         try:
-            two_sided_season(args)
+            plan = two_sided_season(args)
         except ValueError as error:
             parser.error(str(error))
+        if args.plan:   # --plan returns the settings instead of training; show them
+            print(json.dumps(plan, indent=2, default=str))
         raise SystemExit(0)
     if args.plan:
         parser.error('--plan is currently supported for --model two-sided only')

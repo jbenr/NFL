@@ -159,7 +159,7 @@ def slicer(df, play_type, group, stat, agg,
     keys = [df1[c] for c in group_cols]  # array-like keys to group the Series
 
     if agg == 'count':
-        df1 = (df1['weight'].groupby(keys).sum() if RATE_MODE == 'weighted'
+        df1 = (df1['weight'].groupby(keys).sum() if RATE_MODE in DECAY_PRESETS
                else df1.groupby(group_cols).size()).rename(stat)
 
     elif agg == 'sum':
@@ -188,7 +188,19 @@ def slicer(df, play_type, group, stat, agg,
 DECAY_PRESETS = {
     'weighted': dict(total_season_days=160, steepness=3, floor_weight=0.05),
     'steep': dict(total_season_days=160, steepness=10, floor_weight=0.01),
+    # 'carryover': the same curve as 'weighted', but games from an earlier
+    # season count half (PRIOR_SEASON_WEIGHT). The rolling lookback crosses
+    # the season boundary, so in September most of the window is last
+    # season's football -- played by different rosters, under a different
+    # coaching staff in some cases. Days-since decay alone doesn't know
+    # about that boundary: a week 1 game and the prior January's game can
+    # sit at similar weights. This halves the old season instead of
+    # shortening the window, so the sample size stays the same.
+    'carryover': dict(total_season_days=160, steepness=3, floor_weight=0.05),
 }
+# Extra multiplier applied to games from before the newest season in the
+# window, per calculation preset (1.0 = no season boundary effect).
+PRIOR_SEASON_WEIGHT = {'carryover': 0.5}
 
 
 def _per_game_ingredients(df):
@@ -324,8 +336,8 @@ def _pool_ingredients(ingredients, game_dates, calculation):
     _per_game_ingredients) across games into one row per team. 'mean':
     every game weighted equally (plain sum -- pools every play in the
     window as if it were one flat set, no per-game step in the result).
-    'weighted'/'steep': each game's ingredients scaled by its DECAY_PRESETS
-    recency weight before summing -- equivalent to weighting every
+    'weighted'/'steep'/'carryover': each game's ingredients scaled by its
+    DECAY_PRESETS recency weight (and PRIOR_SEASON_WEIGHT) before summing -- equivalent to weighting every
     individual play by its own game's weight, since every play in a game
     shares it."""
     if calculation not in ['mean', *DECAY_PRESETS]:
@@ -337,6 +349,16 @@ def _pool_ingredients(ingredients, game_dates, calculation):
         dates = frame['game_id'].map(game_dates)
         days_from_max = (dates.max() - dates).dt.days.to_numpy()
         weight = gradual_acceleration_with_floor(days_from_max, **DECAY_PRESETS[calculation])
+        prior_season = PRIOR_SEASON_WEIGHT.get(calculation, 1.0)
+        if prior_season != 1.0:
+            # nflverse game ids start with the season ('2024_05_KC_NO'), so the
+            # boundary is exact. Ids that don't carry one (synthetic frames)
+            # fall back to the date: a season runs September through February.
+            seasons = pd.to_numeric(frame['game_id'].astype(str).str.slice(0, 4), errors='coerce')
+            if seasons.isna().any():
+                seasons = seasons.fillna(dates.dt.year - (dates.dt.month < 3).astype(int))
+            seasons = seasons.to_numpy()
+            weight = np.where(seasons < seasons.max(), weight * prior_season, weight)
     result = ingredients.mul(weight, axis=0).groupby(frame['team'].to_numpy()).sum()
     result.index.name = 'team'
     return result

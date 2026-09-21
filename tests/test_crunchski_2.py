@@ -152,6 +152,46 @@ class CalcStatsPerGameTests(unittest.TestCase):
             stats_ = dc2.calc_stats(df)
         self.assertAlmostEqual(stats_.loc['BUF', 'off_run_ypp'], expected)
 
+    def _two_seasons(self):
+        """One game in each season, same team: 'carryover' should halve the older one."""
+        rows = []
+        for game, date, run_yards in [('2025_01_BUF_NYJ', '2025-09-07', [10, 10]),
+                                      ('2024_20_BUF_KC', '2025-01-26', [0, 0])]:
+            for y in run_yards:
+                rows.append(dict(game_id=game, game_date=date, posteam='BUF', play_type='run', yards_gained=y))
+                rows.append(dict(game_id=game, game_date=date, posteam='BUF', play_type='pass',
+                                 yards_gained=5, complete_pass=1))
+        return _plays(rows)
+
+    def test_carryover_halves_games_from_the_previous_season(self):
+        df = self._two_seasons()
+        dates = pd.to_datetime(df.groupby('game_id')['game_date'].first())
+        days = (dates.max() - dates).dt.days.to_numpy()
+        w = dict(zip(dates.index, dc2.gradual_acceleration_with_floor(days, **dc2.DECAY_PRESETS['carryover'])))
+        yards = {'2025_01_BUF_NYJ': 20, '2024_20_BUF_KC': 0}
+        plays = {'2025_01_BUF_NYJ': 2, '2024_20_BUF_KC': 2}
+        half = {g: (0.5 if g.startswith('2024') else 1.0) for g in w}
+        expected = (sum(w[g] * half[g] * yards[g] for g in w) / sum(w[g] * half[g] * plays[g] for g in w))
+        with patch.object(dc2, 'RATE_MODE', 'carryover'):
+            stats_ = dc2.calc_stats(df)
+        self.assertAlmostEqual(stats_.loc['BUF', 'off_run_ypp'], expected)
+
+    def test_carryover_leans_more_on_this_season_than_weighted_does(self):
+        df = self._two_seasons()   # this season 10 ypp, last season 0 ypp
+        with patch.object(dc2, 'RATE_MODE', 'weighted'):
+            weighted_ypp = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        with patch.object(dc2, 'RATE_MODE', 'carryover'):
+            carryover_ypp = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        self.assertGreater(carryover_ypp, weighted_ypp)
+
+    def test_carryover_matches_weighted_inside_one_season(self):
+        df = self._three_games()   # all 2024-25 dates, synthetic ids -> one season
+        with patch.object(dc2, 'RATE_MODE', 'weighted'):
+            weighted_ypp = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        with patch.object(dc2, 'RATE_MODE', 'carryover'):
+            carryover_ypp = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        self.assertAlmostEqual(carryover_ypp, weighted_ypp)
+
     def test_steep_discounts_the_high_volume_old_game_harder_than_weighted(self):
         df = self._three_games()
         with patch.object(dc2, 'RATE_MODE', 'weighted'):
