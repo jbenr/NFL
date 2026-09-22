@@ -400,15 +400,19 @@ def display_stats(season, week, lookback, calculation='mean'):
     # unrelated call in this same process left it as) and put it back
     # afterward so this "just displaying stats" call doesn't leak state
     # into whatever runs next.
-    previous_rate_mode = dc.RATE_MODE
+    previous_rate_mode, previous_leverage = dc.RATE_MODE, dc.GAME_IMPORTANCE
     dc.RATE_MODE = calculation
+    # An importance-weighted preset needs the leverage table too, or it would
+    # quietly fall back to plain recency weighting (see _pool_ingredients).
+    if calculation in dc.IMPORTANCE_WEIGHT:
+        dc.GAME_IMPORTANCE = dc.game_leverage(sorted(selected.get_level_values(0).unique()), (int(season), int(week)))
     # calc_stats needs game_date to compute recency decay for anything
     # other than a flat 'mean' -- only safe to drop it in the 'mean' case.
     plays_in = plays.drop(columns='game_date', errors='ignore') if calculation == 'mean' else plays
     try:
         result = dc.calc_stats(plays_in).reset_index()
     finally:
-        dc.RATE_MODE = previous_rate_mode
+        dc.RATE_MODE, dc.GAME_IMPORTANCE = previous_rate_mode, previous_leverage
     qb, defense = dc.calc_qb_elo(plays, sched)
     # Current scheduled starters; most recent scheduled starter for teams on bye.
     known = sched[(sched.season < season) | ((sched.season == season) & (sched.week <= week))]
@@ -668,8 +672,8 @@ def font_license():
 # Defense table -- Passing/Rushing/Misc for each unit; QB Elo (offense only,
 # no defense has its own QB) gets its own single-metric table, built separately.
 STAT_GROUPS = [
-    ('Passing', ['pass_ypp', 'pass_completion_%', 'explosive_pass_%', 'sack_%', 'qb_hit_%']),
-    ('Rushing', ['run_ypp', 'explosive_run_%', 'stuff_%']),
+    ('Passing', ['pass_ypp', 'pass_epa_pp', 'pass_success_%', 'pass_completion_%', 'explosive_pass_%', 'sack_%', 'qb_hit_%']),
+    ('Rushing', ['run_ypp', 'run_epa_pp', 'run_success_%', 'explosive_run_%', 'stuff_%']),
     ('Misc', ['series_success_%', 'first_down_pp', 'third_down_%', 'fourth_down_%', 'turnovers_pp', 'penalties_pp']),
 ]
 
@@ -855,6 +859,9 @@ def pretty(feature):
               'qb_hit_%': 'QB hits / pass play', 'penalties_pp': 'Penalty flags / play',
               'first_down_pp': 'First downs / play', 'turnovers_pp': 'Turnovers / play',
               'explosive_run_%': 'Runs of 10+ yards', 'explosive_pass_%': 'Passes of 20+ yards',
+              # Model 2.1's EPA family (nflverse expected points; success = a positive-EPA play).
+              'pass_epa_pp': 'Pass EPA/play', 'run_epa_pp': 'Run EPA/play',
+              'pass_success_%': 'Pass success rate', 'run_success_%': 'Run success rate',
               # two_sided_packet's per-dimension weather features -- context_weather
               # (below) is a different, single combined feature from an older model.
               'context_weather_feels_like_f': 'Feels like (°F)', 'context_weather_wind_mph': 'Wind (mph)',
@@ -1088,36 +1095,43 @@ HIGH_CONFIDENCE_CUTOFFS = {
 }
 
 
-# Confidence tiers, measured on Model 2.0's own backtest
-# (data/bt/model_2.0/2020-2025: 1693 games, six seasons; break-even is 52.4%).
-# A pick has to clear its market's edge first; the tier then says how much the
-# same rule has been worth historically, which depends mostly on how late in
-# the season it is -- by week 13 the 20-week lookback is almost entirely
-# current-season football, while in September it is mostly last season.
-#   spread  S: week >= 13 and game importance >= 0.65 -- 62.5% of 115, +19.2%,
-#              above break-even in all six seasons
-#           A: week >= 11 -- 52.3% of 314, +0.6%
-#           B: weeks 1-10 -- 49.1% of 447, -5.5% (shown, but no historical edge)
-#   total   S: week >= 13 -- 58.5% of 189, +12.2%, six of six seasons
-#           A: weeks 11-12 -- 53.5% of 43, +3.6%
-#           B: weeks 1-10 -- 52.4% of 290, +1.0% (break-even)
+# Confidence tiers, measured on Model 2.0's 16-season backtest
+# (data/bt/model_2.0/2010-2025: 4363 games; break-even is 52.4%). A pick has
+# to clear its market's edge first; the tier says what that same rule has been
+# worth historically. Two things drive it, and neither is the model's own SD:
+# how late in the season it is (the 20-week lookback is mostly last season in
+# September) and, for totals, the size of the edge.
+#   spread  S: weeks 13-14 and the playoffs -- 58.0% of 335, +12.4%, above
+#              break-even in all four four-season eras (57/57/54/64)
+#           B: every other week -- 49.9% of 2294, -3.1%, no era above
+#              break-even. Shown for reference, not as an edge.
+#   total   S: weeks 13-14 -- 60.5% of 125, +17.0%, four of four eras
+#           A: week 5 on -- 55.2% of 888, +6.9%, four of four eras (55/54/57/55)
+#           B: weeks 1-4 -- 49.1% of 293, -4.4%, no historical edge
+# Chosen on the four-era consistency above, not on the best single number.
+# A walk-forward check (rule picked on prior seasons only, applied to the next,
+# 2014-2025) returns +6.3% on totals and -2.2% on spreads, which is why only
+# the spread's late-season window earns a tier above B.
 PICK_TIERS = {
-    'spread': dict(edge=3.0, tiers=[('S', dict(week=13, importance=0.65)), ('A', dict(week=11)), ('B', {})]),
-    'total': dict(edge=5.0, tiers=[('S', dict(week=13)), ('A', dict(week=11)), ('B', {})]),
+    'spread': dict(edge=3.0, tiers=[('S', lambda week, importance: 13 <= week <= 14 or week >= 19),
+                                    ('B', lambda week, importance: True)]),
+    'total': dict(edge=5.0, tiers=[('S', lambda week, importance: 13 <= week <= 14),
+                                   ('A', lambda week, importance: week >= 5),
+                                   ('B', lambda week, importance: True)]),
 }
 TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
 TIER_RECORD = {
-    'spread': {'S': 'week 13+ - important game', 'A': 'week 11+', 'B': 'weeks 1-10 - no historical edge'},
-    'total': {'S': 'week 13+', 'A': 'week 11-12', 'B': 'weeks 1-10 - break-even'},
+    'spread': {'S': 'weeks 13-14 and playoffs', 'B': 'other weeks - no historical edge'},
+    'total': {'S': 'weeks 13-14', 'A': 'week 5 on', 'B': 'weeks 1-4 - no historical edge'},
 }
-TIER_HISTORY = {'spread': {'S': '62.5% (n=115)', 'A': '52.3% (n=314)', 'B': '49.1% (n=447)'},
-                'total': {'S': '58.5% (n=189)', 'A': '53.5% (n=43)', 'B': '52.4% (n=290)'}}
+TIER_HISTORY = {'spread': {'S': '58.0% (n=335)', 'B': '49.9% (n=2294)'},
+                'total': {'S': '60.5% (n=125)', 'A': '55.2% (n=888)', 'B': '49.1% (n=293)'}}
 
 
-def pick_tier(market, week, importance):
+def pick_tier(market, week, importance=None):
     """S, A or B for a qualifying pick -- see PICK_TIERS."""
-    for name, rule in PICK_TIERS[market]['tiers']:
-        if int(week) >= rule.get('week', 0) and float(importance or 0) >= rule.get('importance', 0):
+    for name, applies in PICK_TIERS[market]['tiers']:
+        if applies(int(week), importance):
             return name
     return 'B'
 
@@ -1126,7 +1140,8 @@ def tier_legend(markets=('spread', 'total')):
     """The small colour key in the corner of the sheet."""
     items = ''.join(
         f'<span class="tier-key"><i style="background:{TIER_COLORS[tier]}"></i>{escape(tier)} '
-        + escape(' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}' for market in markets))
+        + escape(' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}'
+                            for market in markets if tier in TIER_RECORD[market]))
         + '</span>' for tier in ['S', 'A', 'B'])
     return (f'<div class="tier-legend"><strong>Confidence</strong>{items}'
             '<span class="tier-note">Hit rates are from the 2020-2025 backtest; break-even is 52.4%.</span></div>')
@@ -1147,7 +1162,8 @@ def copy_picks_widget(season, week, light_table):
     script copy succeeds, the click is cancelled before the checkbox flips."""
     subtitle = f'{int(season)} Week {int(week)}'
     legend = [(TIER_COLORS[tier], f'{tier}  ' + ' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}'
-                                                            for market in ['spread', 'total'])) for tier in ['S', 'A', 'B']]
+                                                            for market in ['spread', 'total'] if tier in TIER_RECORD[market]))
+              for tier in ['S', 'A', 'B']]
     png, width = picks_png(light_table, 'Model', subtitle, legend=legend)
     return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
            '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksImage(event)">'
@@ -1522,7 +1538,7 @@ def write_packets(predictions, panel, importance, config, root):
                          + (f' and an SD of at most {cutoffs["sd_cutoff"]:.2f}' if cutoffs.get('sd_cutoff') else ''))
                       + '; otherwise PICK shows –. Its colour is the confidence tier: '
                       + ', '.join(f'{tier} = {TIER_RECORD[market][tier]}, {TIER_HISTORY[market][tier]} in the backtest'
-                                  for tier in ['S', 'A', 'B'])
+                                  for tier in ['S', 'A', 'B'] if tier in TIER_RECORD[market])
                       + '. Break-even is 52.4%. Lines are stored market lines, not live odds, and starting QBs '
                         'aren’t verified.'),
             ('Numbers', f'{"ModelLine" if spread_page else "Model O/U"} and the predicted scores are averages across the '
@@ -1782,6 +1798,9 @@ if __name__ == '__main__':
                              'anything (neural packets only -- two-sided packets no longer keep the CSVs it needs)')
     parser.add_argument('--lookback', type=int, default=20)
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided only: training REG weeks')
+    parser.add_argument('--model-version', choices=list(f'model_{v}' for v in model_spec.VERSIONS), default='model_2.0',
+                        help='Which model version to build: model_2.0 (default) or model_2.1, which adds the '
+                             'EPA inputs. Each writes to its own data/results/model_*/ folder.')
     parser.add_argument('--calculation', default='weighted',
                         help="Stat recency preset (data_crunchski_2.DECAY_PRESETS): 'weighted' (default), "
                              "'steep', or 'carryover' (weighted, with earlier-season games counted half)")
@@ -1794,6 +1813,7 @@ if __name__ == '__main__':
                         'weather yet (i.e. not played yet) -- pull it first with pull_weather.py --season ... '
                         '--week ... --mode live. Defaults to data/weather/forecasts.parquet if it exists.')
     args = parser.parse_args()
+    model_spec.select(args.model_version)   # also swaps the input set (2.1 adds EPA)
     if args.restyle:
         if args.refresh:
             parser.error('--restyle re-renders what is already saved; --refresh refits from new data. Pick one.')

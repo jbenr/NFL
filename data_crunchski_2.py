@@ -31,6 +31,12 @@ _PBP_COLUMNS = {
     'penalty', 'drive', 'sack', 'qb_hit', 'qb_scramble', 'qb_kneel',
     'rushing_yards', 'incomplete_pass', 'passing_yards', 'pass_touchdown',
     'rush_attempt', 'rush_touchdown',
+    # nflverse's expected-points model (Yurko/Ventura/Horowitz's next-scoring-
+    # event approach, as shipped by nflfastR): epa is the points swing of a
+    # play given down, distance and field position; success is epa > 0.
+    # Kneels and spikes have their own play_type values, so the run/pass
+    # filters below already leave them out.
+    'epa', 'success',
 }
 
 
@@ -197,10 +203,23 @@ DECAY_PRESETS = {
     # sit at similar weights. This halves the old season instead of
     # shortening the window, so the sample size stays the same.
     'carryover': dict(total_season_days=160, steepness=3, floor_weight=0.05),
+    # 'importance': 'carryover' (weighted decay, prior season halved) with a
+    # third multiplier -- how much that game mattered to that team at the
+    # time, as playoff leverage (playoff_importance.game_importance, the same
+    # 0-1 number the packet shows). A week 17 game between two eliminated
+    # teams describes future ability far less well than a division decider,
+    # and days-since decay can't tell them apart. Floored so a meaningless
+    # game counts a little rather than nothing.
+    'importance': dict(total_season_days=160, steepness=3, floor_weight=0.05),
 }
 # Extra multiplier applied to games from before the newest season in the
 # window, per calculation preset (1.0 = no season boundary effect).
-PRIOR_SEASON_WEIGHT = {'carryover': 0.5}
+PRIOR_SEASON_WEIGHT = {'carryover': 0.5, 'importance': 0.5}
+# Presets that also scale each game by its playoff leverage for that team.
+# floor: the least a game can count, so a zero-leverage game isn't discarded.
+IMPORTANCE_WEIGHT = {'importance': dict(floor=0.05)}
+# (game_id, team) -> leverage, filled in per process by _init_worker.
+GAME_IMPORTANCE = {}
 
 
 def _per_game_ingredients(df):
@@ -249,6 +268,10 @@ def _per_game_ingredients(df):
                 _explosive_run=lambda s: (s >= 10).sum(), _stuff=lambda s: (s <= 0).sum()),
             pas.groupby(keys)['yards_gained'].agg(
                 _pass_plays='size', _pass_yards='sum', _explosive_pass=lambda s: (s >= 20).sum()),
+            run.groupby(keys)['epa'].sum().rename('_run_epa'),
+            run.groupby(keys)['success'].sum().rename('_run_successes'),
+            pas.groupby(keys)['epa'].sum().rename('_pass_epa'),
+            pas.groupby(keys)['success'].sum().rename('_pass_successes'),
             pas.groupby(keys)['complete_pass'].sum().rename('_completions'),
             pas.groupby(keys)['sack'].sum().rename('_sacks'),
             pas.groupby(keys)['qb_hit'].sum().rename('_qb_hits'),
@@ -328,6 +351,15 @@ def _ratios_from_ingredients(ing, side):
     out[f'{prefix}stuff_%'] = ing._stuff / ing._run_plays
     out[f'{prefix}sack_%'] = ing._sacks / ing._pass_plays
     out[f'{prefix}qb_hit_%'] = ing._qb_hits / ing._pass_plays
+    # EPA family, split by play type: overall EPA/play correlates ~0.97 with
+    # the passing half alone, so one combined number would bury the run
+    # signal (pass and run EPA correlate only ~0.67 with each other). Success
+    # rate (share of plays with positive EPA) is the steadier member of the
+    # family -- higher split-half reliability than EPA itself.
+    out[f'{prefix}pass_epa_pp'] = ing._pass_epa / ing._pass_plays
+    out[f'{prefix}run_epa_pp'] = ing._run_epa / ing._run_plays
+    out[f'{prefix}pass_success_%'] = ing._pass_successes / ing._pass_plays
+    out[f'{prefix}run_success_%'] = ing._run_successes / ing._run_plays
     return out
 
 
@@ -336,8 +368,9 @@ def _pool_ingredients(ingredients, game_dates, calculation):
     _per_game_ingredients) across games into one row per team. 'mean':
     every game weighted equally (plain sum -- pools every play in the
     window as if it were one flat set, no per-game step in the result).
-    'weighted'/'steep'/'carryover': each game's ingredients scaled by its
-    DECAY_PRESETS recency weight (and PRIOR_SEASON_WEIGHT) before summing -- equivalent to weighting every
+    'weighted'/'steep'/'carryover'/'importance': each game's ingredients
+    scaled by its DECAY_PRESETS recency weight (and PRIOR_SEASON_WEIGHT, and
+    IMPORTANCE_WEIGHT's playoff leverage) before summing -- equivalent to weighting every
     individual play by its own game's weight, since every play in a game
     shares it."""
     if calculation not in ['mean', *DECAY_PRESETS]:
@@ -349,6 +382,14 @@ def _pool_ingredients(ingredients, game_dates, calculation):
         dates = frame['game_id'].map(game_dates)
         days_from_max = (dates.max() - dates).dt.days.to_numpy()
         weight = gradual_acceleration_with_floor(days_from_max, **DECAY_PRESETS[calculation])
+        leverage_rule = IMPORTANCE_WEIGHT.get(calculation)
+        if leverage_rule and GAME_IMPORTANCE:
+            leverage = np.array([GAME_IMPORTANCE.get(key, np.nan)
+                                 for key in zip(frame['game_id'], frame['team'])], dtype=float)
+            # A game with no leverage figure (outside the computed weeks) stays
+            # neutral rather than silently dropping out of the pool.
+            leverage = np.where(np.isfinite(leverage), leverage, 1.0)
+            weight = weight * np.clip(leverage, leverage_rule['floor'], None)
         prior_season = PRIOR_SEASON_WEIGHT.get(calculation, 1.0)
         if prior_season != 1.0:
             # nflverse game ids start with the season ('2024_05_KC_NO'), so the
@@ -633,9 +674,31 @@ def comp_stats(stats, sched, use_scaling=True):
 _WORK = None
 
 
-def _build_work(seasons, sched, df, lookback, calculation='mean', pbp_columns=None, use_scaling=True):
-    global RATE_MODE
+def game_leverage(seasons, through):
+    """{(game_id, team): playoff leverage} for every game in `seasons` up to
+    `through` (a (season, week) pair) -- what IMPORTANCE_WEIGHT presets scale
+    each game by. Computed once per process and cached on disk per week by
+    playoff_importance.game_importance (a few seconds a week, then free)."""
+    from playoff_importance import game_importance
+    schedule = pd.read_parquet('data/sched.parquet').replace(
+        {'away_team': RELOCATED_TEAMS, 'home_team': RELOCATED_TEAMS})
+    wanted = schedule[schedule.season.isin(sorted(seasons))][['season', 'week']].drop_duplicates()
+    wanted = wanted[(wanted.season < through[0]) | ((wanted.season == through[0]) & (wanted.week <= through[1]))]
+    if wanted.empty:
+        return {}
+    table = game_importance(schedule, weeks=wanted)
+    leverage = {}
+    for row in table.itertuples():
+        leverage[(row.game_id, row.away_team)] = float(row.away_importance)
+        leverage[(row.game_id, row.home_team)] = float(row.home_importance)
+    return leverage
+
+
+def _build_work(seasons, sched, df, lookback, calculation='mean', pbp_columns=None, use_scaling=True,
+                leverage=None):
+    global RATE_MODE, GAME_IMPORTANCE
     RATE_MODE = calculation
+    GAME_IMPORTANCE = leverage or {}
     # Raw plays are loaded lazily, only after a weekly feature-cache miss.
     return {
         'index': {},
@@ -650,9 +713,10 @@ def _build_work(seasons, sched, df, lookback, calculation='mean', pbp_columns=No
     }
 
 
-def _init_worker(seasons, sched, df, lookback, calculation='mean', pbp_columns=None, use_scaling=True):
+def _init_worker(seasons, sched, df, lookback, calculation='mean', pbp_columns=None, use_scaling=True,
+                 leverage=None):
     global _WORK
-    _WORK = _build_work(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling)
+    _WORK = _build_work(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling, leverage)
 
 
 def _load_window(weeks):
@@ -842,10 +906,15 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='mea
           f"{'  (lookback-limited)' if num_workers == _budget_workers < num_cores // 4 else ''}")
 
     utils.make_dir("data/qb")  # create once here, not concurrently in workers
+    # Playoff leverage for every game the windows can reach, computed here
+    # (not per worker) and passed in -- see game_leverage/IMPORTANCE_WEIGHT.
+    leverage = game_leverage(seasons, (szn, week)) if calculation in IMPORTANCE_WEIGHT else None
+    if leverage:
+        print(f"  leverage  {len(leverage)} team-games weighted by playoff importance")
 
     if num_workers == 1:
         # serial path -- same code, easy to debug and profile
-        _init_worker(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling)
+        _init_worker(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling, leverage)
         results = [_calc_week(sw) for sw in tqdm(tings, desc="Crunching the numbers")]
         _WORK = None  # Release raw plays before neural-net workers start.
     else:
@@ -860,7 +929,7 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='mea
                 max_workers=num_workers,
                 mp_context=ctx,
                 initializer=_init_worker,
-                initargs=(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling)) as executor:
+                initargs=(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling, leverage)) as executor:
             results = list(tqdm(executor.map(_calc_week, tings),
                                 total=len(tings), desc="Crunching the numbers"))
 

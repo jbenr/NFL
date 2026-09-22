@@ -78,6 +78,7 @@ def _plays(rows):
                     third_down_converted=0, third_down_failed=0, fourth_down_converted=0,
                     fourth_down_failed=0, interception=0, fumble_lost=0, penalty=0,
                     drive=1, drive_time_of_possession='0:30', sack=0, qb_hit=0,
+                    epa=0.0, success=0,      # Model 2.1's EPA inputs
                     defteam='OPP')
     return pd.DataFrame([{**defaults, **row} for row in rows])
 
@@ -162,6 +163,71 @@ class CalcStatsPerGameTests(unittest.TestCase):
                 rows.append(dict(game_id=game, game_date=date, posteam='BUF', play_type='pass',
                                  yards_gained=5, complete_pass=1))
         return _plays(rows)
+
+    def test_importance_preset_scales_each_game_by_its_playoff_leverage(self):
+        """'importance' = weighted decay x prior-season halving x leverage."""
+        df = self._two_seasons()     # 2025 game (10 ypp), 2024 game (0 ypp)
+        leverage = {('2025_01_BUF_NYJ', 'BUF'): 1.0, ('2024_20_BUF_KC', 'BUF'): 0.5}
+        dates = pd.to_datetime(df.groupby('game_id')['game_date'].first())
+        days = (dates.max() - dates).dt.days.to_numpy()
+        w = dict(zip(dates.index, dc2.gradual_acceleration_with_floor(days, **dc2.DECAY_PRESETS['importance'])))
+        yards = {'2025_01_BUF_NYJ': 20, '2024_20_BUF_KC': 0}
+        plays = {'2025_01_BUF_NYJ': 2, '2024_20_BUF_KC': 2}
+        # prior season halves as well, so the old game carries 0.5 (season) x 0.5 (leverage)
+        extra = {'2025_01_BUF_NYJ': 1.0, '2024_20_BUF_KC': 0.5 * 0.5}
+        expected = (sum(w[g] * extra[g] * yards[g] for g in w) / sum(w[g] * extra[g] * plays[g] for g in w))
+        with patch.object(dc2, 'RATE_MODE', 'importance'), patch.object(dc2, 'GAME_IMPORTANCE', leverage):
+            stats_ = dc2.calc_stats(df)
+        self.assertAlmostEqual(stats_.loc['BUF', 'off_run_ypp'], expected)
+
+    def test_importance_floors_a_meaningless_game_instead_of_dropping_it(self):
+        df = self._two_seasons()
+        floor = dc2.IMPORTANCE_WEIGHT['importance']['floor']
+        zero = {('2025_01_BUF_NYJ', 'BUF'): 1.0, ('2024_20_BUF_KC', 'BUF'): 0.0}
+        floored = {('2025_01_BUF_NYJ', 'BUF'): 1.0, ('2024_20_BUF_KC', 'BUF'): floor}
+        with patch.object(dc2, 'RATE_MODE', 'importance'), patch.object(dc2, 'GAME_IMPORTANCE', zero):
+            at_zero = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        with patch.object(dc2, 'RATE_MODE', 'importance'), patch.object(dc2, 'GAME_IMPORTANCE', floored):
+            at_floor = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        self.assertAlmostEqual(at_zero, at_floor)     # zero leverage is clipped to the floor
+        self.assertLess(at_zero, 10.0)                # and the old game still pulls the average down
+
+    def test_unknown_leverage_leaves_a_game_at_full_weight(self):
+        df = self._two_seasons()
+        with patch.object(dc2, 'RATE_MODE', 'carryover'):
+            carryover_ypp = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        with patch.object(dc2, 'RATE_MODE', 'importance'), patch.object(dc2, 'GAME_IMPORTANCE', {('x', 'BUF'): 0.5}):
+            unknown_ypp = dc2.calc_stats(df).loc['BUF', 'off_run_ypp']
+        self.assertAlmostEqual(unknown_ypp, carryover_ypp)
+
+    def test_epa_metrics_come_from_the_play_level_epa_and_success_columns(self):
+        """Model 2.1's inputs: EPA per play and success rate, split pass/run."""
+        rows = [dict(game_id='2025_01_BUF_NYJ', game_date='2025-09-07', posteam='BUF', play_type='run',
+                     yards_gained=4, epa=0.5, success=1),
+                dict(game_id='2025_01_BUF_NYJ', game_date='2025-09-07', posteam='BUF', play_type='run',
+                     yards_gained=0, epa=-0.9, success=0),
+                dict(game_id='2025_01_BUF_NYJ', game_date='2025-09-07', posteam='BUF', play_type='pass',
+                     yards_gained=12, epa=1.5, success=1, complete_pass=1),
+                dict(game_id='2025_01_BUF_NYJ', game_date='2025-09-07', posteam='BUF', play_type='pass',
+                     yards_gained=0, epa=-0.5, success=0, complete_pass=0)]
+        with patch.object(dc2, 'RATE_MODE', 'mean'):
+            stats_ = dc2.calc_stats(_plays(rows))
+        self.assertAlmostEqual(stats_.loc['BUF', 'off_run_epa_pp'], (0.5 - 0.9) / 2)
+        self.assertAlmostEqual(stats_.loc['BUF', 'off_pass_epa_pp'], (1.5 - 0.5) / 2)
+        self.assertAlmostEqual(stats_.loc['BUF', 'off_run_success_%'], 0.5)
+        self.assertAlmostEqual(stats_.loc['BUF', 'off_pass_success_%'], 0.5)
+
+    def test_epa_metrics_join_the_model_input_set_only_for_2_1(self):
+        import data_crunchski_3 as dc3
+        base = dc3.use_epa(False)
+        self.assertNotIn('pass_epa_pp', base)
+        with_epa = dc3.use_epa(True)
+        self.assertEqual(with_epa[-4:], dc3.EPA_METRICS)
+        # FEATURES tracks METRICS, and both lists are shared by every importer.
+        self.assertIn('off_pass_epa_pp', dc3.FEATURES)
+        self.assertIn('def_run_success_%', dc3.FEATURES)
+        dc3.use_epa(False)
+        self.assertNotIn('off_pass_epa_pp', dc3.FEATURES)
 
     def test_carryover_halves_games_from_the_previous_season(self):
         df = self._two_seasons()

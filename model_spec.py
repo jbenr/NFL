@@ -18,17 +18,46 @@ from datetime import datetime
 from pathlib import Path
 
 NAME = 'Model'
+# Every version the code can build, newest last. 'epa' is the only structural
+# difference so far: 2.1 adds data_crunchski_3.EPA_METRICS to the input set.
+# select() switches between them; nothing else in the pipeline hard-codes a
+# version, so both stay runnable side by side and write to separate folders.
+VERSIONS = {
+    '2.0': dict(epa=False, changes=[
+        'Weather inputs cut from 7 (feels-like, wind, precipitation, rain, snowfall, snow depth, indoor flag) '
+        'to 3: feels-like, wind, precipitation.',
+        'Renamed from "two-sided-team-points-v1"; results moved from data/results/packet_shared/ to '
+        'data/results/model_2.0/.']),
+    '2.1': dict(epa=True, changes=[
+        'Adds four EPA inputs per team, split by play type: pass and run EPA per play, and pass and run '
+        'success rate (the share of plays with positive EPA). EPA comes from nflverse\'s expected-points '
+        'model, which credits down, distance and field position rather than raw yards.',
+        'Split rather than combined because overall EPA per play correlates about 0.97 with its passing half '
+        'alone, so a single number would bury the run signal (pass and run EPA correlate about 0.67).',
+        'Everything else matches Model 2.0: same network, weather inputs, training window and lookback.']),
+}
 VERSION = '2.0'
 LABEL = f'{NAME} {VERSION}'
 ID = f'model-{VERSION}'
 RESULTS = Path(f'data/results/model_{VERSION}')
+CHANGES = VERSIONS[VERSION]['changes']
 
-CHANGES = [
-    'Weather inputs cut from 7 (feels-like, wind, precipitation, rain, snowfall, snow depth, indoor flag) '
-    'to 3: feels-like, wind, precipitation.',
-    'Renamed from "two-sided-team-points-v1"; results moved from data/results/packet_shared/ to '
-    'data/results/model_2.0/.',
-]
+
+def select(version):
+    """Switch the whole process to a model version: its label, results folder
+    and input set. Call once, before building a panel -- the feature lists are
+    shared module state (data_crunchski_3.use_epa)."""
+    import data_crunchski_3 as dc3
+    version = str(version).replace('model_', '')
+    if version not in VERSIONS:
+        raise ValueError(f'Unknown model version {version!r}; have {", ".join(VERSIONS)}')
+    global VERSION, LABEL, ID, RESULTS, CHANGES
+    VERSION = version
+    LABEL, ID = f'{NAME} {VERSION}', f'model-{VERSION}'
+    RESULTS = Path(f'data/results/model_{VERSION}')
+    CHANGES = VERSIONS[VERSION]['changes']
+    dc3.use_epa(VERSIONS[VERSION]['epa'])
+    return VERSION
 
 
 def run_folder(season, week, lookback):
@@ -123,14 +152,13 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
             **{market: f'edge >= {rule["diff_cutoff"]:g} points'
                        + (f' and SD <= {rule["sd_cutoff"]:.2f}' if rule.get('sd_cutoff') else ' (no SD condition)')
                for market, rule in cutoffs.items()},
-            'provenance': (f'checked on {LABEL}\'s own backtest (data/bt/model_2.0/2020-2025: 1693 games, six '
-                           'seasons). Totals at edge >= 5 won 54.7% of 522 bets (+5.2% roi), at or above 51% every '
-                           'season; the old SD condition made it worse and was dropped. No spread rule held up: the '
-                           'old 5.0/4.83 cutoff went 50.6% (-2.7%) and a 1230-rule search found nothing that survived '
-                           'out of sample. Both markets improve markedly from week 13 on (spread edge >= 3: 55.7%; '
-                           'total edge >= 5: 58.5%), which is not yet built into the rules above. Break-even is 52.4%, '
-                           'and none of these intervals exclude zero by a comfortable margin -- treat picks as '
-                           'experimental.'),
+            'provenance': (f'checked on {LABEL}\'s 16-season backtest (data/bt/model_2.0/2010-2025: 4363 '
+                           'games). Totals: no edge in weeks 1-4 (49.1%), 55.2% from week 5 on (n=888, four of '
+                           'four eras above break-even) and 60.5% in weeks 13-14. Spreads: 58.0% in weeks 13-14 '
+                           'and the playoffs (n=335, four of four eras), 49.9% otherwise -- no edge. A '
+                           'walk-forward check over 2014-2025 (rule chosen on prior seasons only) returns +6.3% '
+                           'roi on totals and -2.2% on spreads. Break-even is 52.4%; the pick tiers on the sheet '
+                           'carry these rates.'),
         },
         'attributions': {
             'method': 'integrated gradients (64 steps), per member, averaged across the ensemble',

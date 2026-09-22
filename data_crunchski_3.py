@@ -7,6 +7,20 @@ from edge_scan import PRODUCTION_FEATURES
 
 METRICS = [f[len('away_off_'):] for f in PRODUCTION_FEATURES if f.startswith('away_off_')]
 FEATURES = [f'{unit}_{metric}' for metric in METRICS for unit in ['off', 'def']]
+# Model 2.1's additions (model_spec selects them): EPA per play and success
+# rate, split by play type because overall EPA is ~0.97 correlated with its
+# passing half. Each one becomes an own-offense and an own-defense input, and
+# the pass/run naming is what earns them usage scaling in two_sided_rows.
+EPA_METRICS = ['pass_epa_pp', 'run_epa_pp', 'pass_success_%', 'run_success_%']
+
+
+def use_epa(enabled=True):
+    """Add (or drop) EPA_METRICS in the shared METRICS/FEATURES lists, in
+    place, so every module that imported them sees the same set."""
+    base = [m for m in METRICS if m not in EPA_METRICS]
+    METRICS[:] = base + (EPA_METRICS if enabled else [])
+    FEATURES[:] = [f'{unit}_{metric}' for metric in METRICS for unit in ['off', 'def']]
+    return list(METRICS)
 GROUPS = {'stadium': ['stadium_id'], 'field': ['surface', 'roof'], 'referee': ['referee']}
 BASE_CONTEXT = ['home_field', 'rest_advantage']
 INPUT_MODES = ['separate', 'differential', 'percentile', 'zscore']
