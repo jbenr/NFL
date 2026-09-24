@@ -230,6 +230,21 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .tier-key i{display:inline-block;width:10px;height:10px;border-radius:2px;flex:0 0 auto}
 .tier-note{color:#8e99a5}
 @media(max-width:650px){.tier-legend{align-items:flex-start;text-align:left}}
+/* The expandable key under the sheet (tier_guide). */
+.tier-guide{margin:10px 0 0;font:12px/1.5 Arial,sans-serif;color:#c8cdd3}
+.tier-guide summary{cursor:pointer;font:13px Graduate,Georgia,serif;color:#e3e6e9;text-align:right}
+.tier-guide h4{font:13px Graduate,Georgia,serif;color:#e3e6e9;margin:14px 0 4px}
+.tier-qualify{margin:0 0 8px;color:#9ba8b5}
+.tier-table{width:100%;border-collapse:collapse;font-size:12px}
+.tier-table th,.tier-guide p,.tier-guide h4{text-align:left}
+.tier-table th{text-align:left;font-weight:600;color:#9ba8b5;border-bottom:1px solid #41464e;padding:4px 8px 4px 0}
+.tier-table td{vertical-align:top;padding:5px 8px 5px 0;border-bottom:1px solid #23272c;text-align:left}
+.tier-table .tier-record{color:#b7c0c9;white-space:nowrap}
+.tier-note-row td{color:#8e99a5;border-bottom:1px solid #23272c;padding-top:0}
+.tier-chip{display:inline-block;width:20px;text-align:center;border-radius:3px;color:#222;font-weight:700}
+.tier-guide .tier-note{color:#8e99a5;margin:12px 0 0}
+@media(max-width:650px){.tier-table th:nth-child(4),.tier-table td:nth-child(4),
+.tier-table th:nth-child(5),.tier-table td:nth-child(5){display:none}.tier-guide summary{text-align:left}}
 .packet .headline-table td{padding:3px 8px}
 /* Every stats table formatted the same tight way (this used to be QB
    Elo-only, leaving the others visibly looser/wider) -- small logos,
@@ -503,8 +518,13 @@ def comparison_bars(stats, offense, defense, metric):
 @lru_cache(maxsize=1)
 def packet_schedule():
     import data_crunchski_2 as dc
-    return pd.read_parquet('data/sched.parquet').replace(
+    import travel
+    sched = pd.read_parquet('data/sched.parquet').replace(
         {'away_team': dc.RELOCATED_TEAMS, 'home_team': dc.RELOCATED_TEAMS})
+    # Travel miles per team (travel.py, from the same stadium coordinates the
+    # weather pull uses) -- shown next to the Travel bar whether or not the
+    # running model version takes them as an input.
+    return sched.merge(travel.game_travel(sched), on='game_id', how='left', validate='one_to_one')
 
 
 # data/sched.parquet's surface codes, as they're written on the page.
@@ -532,7 +552,7 @@ def context_cells(feature, row):
     if feature == 'context_weather':
         # An older model's single combined weather feature: just the bar.
         return 'Weather', '', ''
-    if feature not in ['away_rest_adv', 'home_field_adv', 'context_referee']:
+    if feature not in ['away_rest_adv', 'away_travel_adv', 'home_field_adv', 'context_referee']:
         return label, '', ''
     game = schedule_game(row)
     if game is None:
@@ -551,6 +571,11 @@ def context_cells(feature, row):
         neutral = str(game.get('location', '')).lower() == 'neutral'
         return label, '', ' · '.join(p for p in [venue, SURFACES.get(surface.lower(), surface.title()),
                                                 'neutral site' if neutral else ''] if p)
+    if feature == 'away_travel_adv':
+        away, home = game.get('away_travel_miles'), game.get('home_travel_miles')
+        if pd.isna(away) or pd.isna(home):
+            return 'Travel', '', ''
+        return 'Travel', f'{row.away_team} {away:,.0f} mi', f'{row.home_team} {home:,.0f} mi'
     away, home = game.get('away_rest'), game.get('home_rest')
     if pd.isna(away) or pd.isna(home):
         return label, '', ''
@@ -605,7 +630,8 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
                         f'<div class="net-bar" aria-label="Net matchup contribution">{point_bar(direction * net, net_scale, row)}</div>'
                         f'<div class="side">{escape(row.home_team)} {right_label}{logo(row.home_team)}</div></div></summary>{"".join(rows)}</details>')
     other = []
-    context_order = ['home_field_adv', 'context_stadium', 'context_field', 'away_rest_adv', 'context_referee',
+    context_order = ['home_field_adv', 'context_stadium', 'context_field', 'away_rest_adv', 'away_travel_adv',
+                     'context_referee',
                      'context_importance', 'context_weather']
     context_features = sorted((f for f in values if f not in used and not f.startswith('context_weather_')),
                               key=lambda f: (context_order.index(f) if f in context_order else len(context_order), f))
@@ -874,6 +900,7 @@ def pretty(feature):
     label = label.replace('total_', 'Combined · ').replace('_', ' ')
     for old, new in [('ypp', 'yards/play'), (' pp', '/play'), ('qb elo', 'QB Elo'),
                      ('home field adv', 'Home field'), ('away rest adv', 'Away rest advantage'),
+                     ('away travel adv', 'Travel distance'),
                      ('away game importance', 'Game-importance difference')]:
         label = label.replace(old, new)
     return label[:1].upper() + label[1:]
@@ -948,7 +975,8 @@ def game_header(row, market, action):
     if action == 'PASS':
         pick = '–'
     else:
-        tier = pick_tier(market, row.week, row.get('total_game_importance'))
+        tier = pick_tier(market, row.week, row.get('total_game_importance'), float(np.sqrt(row.variance)),
+                         row.get('market_base'))
         pick = f'<span class="pill pick tier-{tier}" title="{escape(tier)} confidence">{escape(action)}</span>'
     scores = ''
     if pd.notna(row.get('away_points')) and pd.notna(row.get('home_points')):
@@ -1095,45 +1123,109 @@ HIGH_CONFIDENCE_CUTOFFS = {
 }
 
 
-# Confidence tiers, measured on Model 2.0's 16-season backtest
-# (data/bt/model_2.0/2010-2025: 4363 games; break-even is 52.4%). A pick has
-# to clear its market's edge first; the tier says what that same rule has been
-# worth historically. Two things drive it, and neither is the model's own SD:
-# how late in the season it is (the 20-week lookback is mostly last season in
-# September) and, for totals, the size of the edge.
-#   spread  S: weeks 13-14 and the playoffs -- 58.0% of 335, +12.4%, above
-#              break-even in all four four-season eras (57/57/54/64)
-#           B: every other week -- 49.9% of 2294, -3.1%, no era above
-#              break-even. Shown for reference, not as an edge.
-#   total   S: weeks 13-14 -- 60.5% of 125, +17.0%, four of four eras
-#           A: week 5 on -- 55.2% of 888, +6.9%, four of four eras (55/54/57/55)
-#           B: weeks 1-4 -- 49.1% of 293, -4.4%, no historical edge
-# Chosen on the four-era consistency above, not on the best single number.
-# A walk-forward check (rule picked on prior seasons only, applied to the next,
-# 2014-2025) returns +6.3% on totals and -2.2% on spreads, which is why only
-# the spread's late-season window earns a tier above B.
+# Confidence tiers. Every rule below was measured on ONE backtest -- Model 2.0
+# with 'weighted' stats and a 20-week lookback, 2010-2025, 4363 games
+# (TIER_SOURCE) -- and the same rules were checked against the carryover and
+# steep-lookback-10 runs, which agree within a point or two. Break-even is
+# 52.4%. A pick has to clear its market's edge first (PICK_TIERS['edge']);
+# the tier then says what that rule has been worth historically.
+#
+# What drives the tiers is not the model's own confidence but the situation:
+# how late in the season it is (in September the 20-week lookback is mostly
+# last season), whether the ensemble agrees with itself (spread only), and
+# where the market priced the total (totals only).
+TIER_SOURCE = 'Model 2.0 (weighted, 20-week lookback) backtest, 2010-2025: 4363 games'
 PICK_TIERS = {
-    'spread': dict(edge=3.0, tiers=[('S', lambda week, importance: 13 <= week <= 14 or week >= 19),
-                                    ('B', lambda week, importance: True)]),
-    'total': dict(edge=5.0, tiers=[('S', lambda week, importance: 13 <= week <= 14),
-                                   ('A', lambda week, importance: week >= 5),
-                                   ('B', lambda week, importance: True)]),
+    'spread': dict(edge=3.0, tiers=[
+        ('S', lambda week, importance, sd, line: (13 <= week <= 14 or week >= 19) and (sd is None or sd <= 4.5)),
+        ('B', lambda week, importance, sd, line: True)]),
+    'total': dict(edge=5.0, tiers=[
+        # 42-46 is a dead band for this model: those picks hit 47.8% while the
+        # rest hit 59.8%, in all four eras and on every run. It shows up at
+        # every edge level (48.1% even with no edge filter at all), and only on
+        # the VEGAS total -- bucketing by the model's own number finds nothing.
+        ('S', lambda week, importance, sd, line: 13 <= week <= 14 and not dead_total(line)),
+        ('A', lambda week, importance, sd, line: week >= 5 and not dead_total(line)),
+        ('B', lambda week, importance, sd, line: True)]),
 }
+DEAD_TOTAL = (42.0, 46.0)
 TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
-TIER_RECORD = {
-    'spread': {'S': 'weeks 13-14 and playoffs', 'B': 'other weeks - no historical edge'},
-    'total': {'S': 'weeks 13-14', 'A': 'week 5 on', 'B': 'weeks 1-4 - no historical edge'},
+# rule: what earns the tier. record/eras/volume: how it did in TIER_SOURCE.
+TIER_GUIDE = {
+    'spread': {
+        'qualify': 'the model disagrees with the spread by at least 3 points',
+        'S': dict(rule='week 13-14 or the playoffs, and the ensemble agrees with itself (SD at most 4.5)',
+                  record='60.0% of 233 picks, +16.2% per bet', volume='about 15 a season',
+                  eras='60 / 62 / 49 / 67% across four-season eras',
+                  note='The SD condition earns its place: the same weeks without it are 58.0%, and the '
+                       'high-SD games it drops are 53.9%. It holds in both halves of the record.'),
+        'B': dict(rule='every other qualifying pick', record='49.1% of 2046 picks, -4.5% per bet',
+                  volume='about 128 a season', eras='47 / 47 / 52 / 50%',
+                  note='No era above break-even. Spreads before week 13 carry no measurable information: '
+                       'the model disagreeing with the market there predicts nothing. Shown for reference.'),
+    },
+    'total': {
+        'qualify': 'the model disagrees with the total by at least 5 points, and the posted total is outside 42-46',
+        'S': dict(rule='week 13-14, posted total outside 42-46',
+                  record='64.0% of 89 picks, +23.7% per bet', volume='about 6 a season',
+                  eras='52 / 65 / 71 / 65%',
+                  note='The smallest and strongest bucket; thin enough that a quiet season is normal.'),
+        'A': dict(rule='week 5 on, posted total outside 42-46',
+                  record='59.0% of 498 picks, +14.2% per bet', volume='about 31 a season',
+                  eras='61 / 55 / 58 / 61%',
+                  note='Above break-even in all four eras. A walk-forward check (rule picked on earlier '
+                       'seasons only, applied to the next) chose the 42-46 skip in 12 of 12 seasons and '
+                       'returned 59.9%, so this is not a hindsight fit.'),
+        'B': dict(rule='weeks 1-4, or a posted total of 42-46 in any week',
+                  record='49.5% of 570 picks, -3.8% per bet', volume='about 36 a season',
+                  eras='47 / 53 / 52 / 47%',
+                  note='Two different dead spots pooled: September, when the lookback is mostly last '
+                       'season, and the 42-46 band, where this model is wrong in every era.'),
+    },
 }
-TIER_HISTORY = {'spread': {'S': '58.0% (n=335)', 'B': '49.9% (n=2294)'},
-                'total': {'S': '60.5% (n=125)', 'A': '55.2% (n=888)', 'B': '49.1% (n=293)'}}
+TIER_RECORD = {market: {tier: guide[tier]['rule'] for tier in 'SAB' if tier in guide}
+               for market, guide in TIER_GUIDE.items()}
+TIER_HISTORY = {market: {tier: guide[tier]['record'].split(',')[0] for tier in 'SAB' if tier in guide}
+                for market, guide in TIER_GUIDE.items()}
 
 
-def pick_tier(market, week, importance=None):
-    """S, A or B for a qualifying pick -- see PICK_TIERS."""
+def dead_total(line):
+    """The 42-46 band on the posted total, where this model has no edge."""
+    return line is not None and pd.notna(line) and DEAD_TOTAL[0] <= float(line) <= DEAD_TOTAL[1]
+
+
+def pick_tier(market, week, importance=None, sd=None, line=None):
+    """S, A or B for a qualifying pick -- see PICK_TIERS and TIER_GUIDE.
+    sd: the ensemble's disagreement. line: the market's own number (the posted
+    total, or the spread). Either being None never blocks a tier."""
     for name, applies in PICK_TIERS[market]['tiers']:
-        if applies(int(week), importance):
+        if applies(int(week), importance, sd, line):
             return name
     return 'B'
+
+
+def tier_guide():
+    """The expandable key under the sheet: every tier's rule and record."""
+    sections = []
+    for market, guide in TIER_GUIDE.items():
+        rows = ''.join(
+            f'<tr><td><span class="tier-chip" style="background:{TIER_COLORS[tier]}">{tier}</span></td>'
+            f'<td>{escape(guide[tier]["rule"])}</td><td class="tier-record">{escape(guide[tier]["record"])}</td>'
+            f'<td class="tier-record">{escape(guide[tier]["volume"])}</td>'
+            f'<td class="tier-record">{escape(guide[tier]["eras"])}</td></tr>'
+            f'<tr class="tier-note-row"><td></td><td colspan="4">{escape(guide[tier]["note"])}</td></tr>'
+            for tier in 'SAB' if tier in guide)
+        sections.append(
+            f'<h4>{escape(market.title())} picks</h4>'
+            f'<p class="tier-qualify">A pick appears when {escape(guide["qualify"])}.</p>'
+            '<table class="tier-table"><thead><tr><th></th><th>Earns the tier</th><th>Record</th>'
+            '<th>Volume</th><th>By era</th></tr></thead><tbody>' + rows + '</tbody></table>')
+    return ('<details class="tier-guide"><summary>What the pick colours mean</summary>'
+            + ''.join(sections)
+            + f'<p class="tier-note">Measured on the {escape(TIER_SOURCE)}, and checked against the carryover '
+              'and steep-lookback runs, which agree within a point or two. Break-even at -110 is 52.4%, so a '
+              'tier below that is information, not an edge. Hit rates are what the rule did historically, not '
+              'a forecast for any single pick.</p></details>')
 
 
 def tier_legend(markets=('spread', 'total')):
@@ -1144,7 +1236,7 @@ def tier_legend(markets=('spread', 'total')):
                             for market in markets if tier in TIER_RECORD[market]))
         + '</span>' for tier in ['S', 'A', 'B'])
     return (f'<div class="tier-legend"><strong>Confidence</strong>{items}'
-            '<span class="tier-note">Hit rates are from the 2020-2025 backtest; break-even is 52.4%.</span></div>')
+            f'<span class="tier-note">Hit rates: {escape(TIER_SOURCE)}. Break-even is 52.4%.</span></div>')
 
 
 def copy_picks_widget(season, week, light_table):
@@ -1379,7 +1471,8 @@ def headline_table(folder, light=False):
         # away favored by X), matching game_header's Market/Model rows.
         # Total has no team-perspective concept, so it's left alone.
         sign = -1 if market == 'spread' else 1
-        return dict(line=sign * r.market_base, model=sign * r.prediction, diff=abs(r.edge), sd=r.sd, pick=pick), (pick if pick != 'PASS' else None)
+        return (dict(line=sign * r.market_base, model=sign * r.prediction, diff=abs(r.edge), sd=r.sd,
+                     market_line=r.market_base, pick=pick), (pick if pick != 'PASS' else None))
 
     rows = []
     picks = set()
@@ -1401,8 +1494,10 @@ def headline_table(folder, light=False):
             diff=spread['diff'], pick=spread['pick'],
             total=total['line'], total_prediction=total['model'],
             total_diff=total['diff'], total_pick=total['pick'],
-            spread_tier=pick_tier('spread', g.week, g.get('total_game_importance')) if spread_pick else '',
-            total_tier=pick_tier('total', g.week, g.get('total_game_importance')) if total_pick else ''))
+            spread_tier=pick_tier('spread', g.week, g.get('total_game_importance'), spread['sd'],
+                                  spread['market_line']) if spread_pick else '',
+            total_tier=pick_tier('total', g.week, g.get('total_game_importance'), total['sd'],
+                                 total['market_line']) if total_pick else ''))
     table = pd.DataFrame(rows)
     table['gameday'] = pd.to_datetime(table.gameday)
     table['gametime'] = pd.to_datetime(table.gametime, format='%H:%M', errors='coerce').dt.time
@@ -1477,7 +1572,7 @@ def headline_table(folder, light=False):
              .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'Picks',
                              'O/U', 'Model', 'Diff', 'Picks'], axis=1)
              .apply(tier_styles, axis=None))
-    return styled.to_html() + tier_legend()
+    return styled.to_html() + tier_legend() + tier_guide()
 
 
 def write_packets(predictions, panel, importance, config, root):
@@ -1531,6 +1626,7 @@ def write_packets(predictions, panel, importance, config, root):
         # shared network (see fit_two_sided and matchup_attribution); other
         # model families get the generic version.
         spread_page = market == 'spread'
+        travelling = 'attr_away_travel_adv' in games.columns
         notes = [
             # An SD condition is optional per market; neither uses one now.
             ('Picks', 'A pick needs an edge of at least '
@@ -1559,8 +1655,14 @@ def write_packets(predictions, panel, importance, config, root):
                                              'inputs to its own score, so it also reflects the home offense against the away '
                                              'defense, not only the matchup in its label. The second bar does the same for each '
                                              'team’s defense-vs-opposing-offense inputs. Expand either bar for one row per stat.'),
-                ('Home field and rest', 'Fixed adjustments: a learned weight times the home-field or rest-day difference, '
-                                        'measured from a neutral site with equal rest.'),
+                # Travel is Model 2.2's input; older versions' packets keep the
+                # two-term wording rather than describing a bar they don't have.
+                (('Home field, rest and travel' if travelling else 'Home field and rest'),
+                 'Fixed adjustments: a learned weight times the home-field'
+                 + (', rest-day or travel-distance difference, measured from a neutral site with equal rest and equal '
+                    'travel. Travel is the flight from each team’s home stadium to this one, so the home team is '
+                    'normally 0 and only the difference between the two matters.' if travelling else
+                    ' or rest-day difference, measured from a neutral site with equal rest.')),
                 ('Weather', 'The model uses feels-like temperature, wind and precipitation. Indoor games get fixed '
                             '72°F, calm, dry readings. The bars are measured from the average training game, so an '
                             'ordinary day can still show small ones; those come from that average, not the conditions. '
@@ -1799,8 +1901,9 @@ if __name__ == '__main__':
     parser.add_argument('--lookback', type=int, default=20)
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided only: training REG weeks')
     parser.add_argument('--model-version', choices=list(f'model_{v}' for v in model_spec.VERSIONS), default='model_2.0',
-                        help='Which model version to build: model_2.0 (default) or model_2.1, which adds the '
-                             'EPA inputs. Each writes to its own data/results/model_*/ folder.')
+                        help='Which model version to build: model_2.0 (default), model_2.1 (adds the EPA inputs) '
+                             'or model_2.2 (adds the travel-distance input). Each writes to its own '
+                             'data/results/model_*/ folder.')
     parser.add_argument('--calculation', default='weighted',
                         help="Stat recency preset (data_crunchski_2.DECAY_PRESETS): 'weighted' (default), "
                              "'steep', or 'carryover' (weighted, with earlier-season games counted half)")
@@ -1813,7 +1916,7 @@ if __name__ == '__main__':
                         'weather yet (i.e. not played yet) -- pull it first with pull_weather.py --season ... '
                         '--week ... --mode live. Defaults to data/weather/forecasts.parquet if it exists.')
     args = parser.parse_args()
-    model_spec.select(args.model_version)   # also swaps the input set (2.1 adds EPA)
+    model_spec.select(args.model_version)   # also swaps the input set (2.1 adds EPA, 2.2 adds travel)
     if args.restyle:
         if args.refresh:
             parser.error('--restyle re-renders what is already saved; --refresh refits from new data. Pick one.')

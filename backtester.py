@@ -553,7 +553,7 @@ def two_sided_season(args):
     model_version = getattr(args, 'model_version', 'legacy')
     if model_version.startswith('model_'):
         import model_spec
-        model_spec.select(model_version)   # also swaps the input set (2.1 adds EPA)
+        model_spec.select(model_version)   # also swaps the input set (2.1 adds EPA, 2.2 adds travel)
         model_name = model_spec.ID
         model_label = model_spec.LABEL
         calculation = 'weighted'
@@ -584,7 +584,8 @@ def two_sided_season(args):
                   lookback=args.lookback, train_window=args.train_window, calculation=calculation,
                   inputs='league_snapshot_zscore', usage_scaling='symmetric_post_normalization',
                   weather_source='historical_reanalysis', weather_file=str(weather_file),
-                  weather_features=dc3.MODEL_WEATHER, metrics=list(dc3.METRICS), iterations=args.iterations,
+                  weather_features=dc3.MODEL_WEATHER, metrics=list(dc3.METRICS), context=list(dc3.BASE_CONTEXT),
+                  iterations=args.iterations,
                   epochs=args.epochs, seed=args.seed, status='RETROSPECTIVE — NOT PREGAME VALIDATION',
                   qb_decay='existing QB Elo decay unchanged')
     # Keep the existing legacy single-season path name unchanged (data/bt/two_sided/{season}/...)
@@ -614,6 +615,9 @@ def two_sided_season(args):
           f'  RETROSPECTIVE WEATHER EXPERIMENT — not pregame betting validation\n'
           f'  Output: {output}', flush=True)
     panel = dc3.attach_historical_weather(panel, weather_file)
+    if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:   # Model 2.2's input
+        import travel
+        panel = travel.attach_travel(panel)
     output.mkdir(parents=True, exist_ok=True)
     (output / 'config.json').write_text(json.dumps(config, indent=2), encoding='utf-8')
     results, importances = [], []
@@ -668,8 +672,11 @@ def configure_workers(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', choices=['shared', 'joint', 'two-sided'], default='shared')
-    parser.add_argument('--model-version', choices=['legacy', 'model_2.0', 'model_2.1'], default='legacy',
-                        help='Two-sided: legacy steep experiment or current Model 2.0 weighted production settings')
+    import model_spec
+    parser.add_argument('--model-version', choices=['legacy'] + [f'model_{v}' for v in model_spec.VERSIONS],
+                        default='legacy',
+                        help='Two-sided: legacy steep experiment, or a Model 2.x version with its own input set '
+                             '(2.1 adds EPA, 2.2 adds travel distance) and weighted production settings')
     parser.add_argument('--calculation', choices=list(dc.DECAY_PRESETS), default=None,
                         help="Stat recency preset. Default: whatever the model version uses ('weighted' for "
                              "model_2.0, 'steep' for legacy). 'carryover' is 'weighted' with games from an "

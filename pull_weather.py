@@ -102,6 +102,50 @@ def fetch_historical(latitude, longitude, date, cache_dir, refresh=False):
     return frame
 
 
+# The stadium table comes from an outside CSV, and a wrong sign in it is
+# invisible: the pull succeeds, it just describes a different place on earth.
+# greerreNFL/stadiums lists Qualcomm Stadium (San Diego, tz America/Los_Angeles)
+# at longitude +117.12, a point in eastern China -- which gave every Chargers
+# home game 1999-2016 a mean feels-like of 44F against 61F at comparable
+# California venues. Corrections are applied on load, and every venue is then
+# checked against the regions the NFL actually plays in.
+VENUE_CORRECTIONS = {'SDG00': dict(longitude=-117.1195919)}  # sign error upstream
+VENUE_REGIONS = {'Americas': (-56., 72., -170., -30.), 'Europe/Africa': (-35., 71., -25., 45.),
+                 'Australia': (-45., -10., 110., 155.)}  # (min lat, max lat, min lon, max lon)
+
+
+def check_venues(venues):
+    """Every stadium inside one of the regions the league plays in."""
+    lat, lon = venues.latitude.to_numpy(float), venues.longitude.to_numpy(float)
+    inside = np.zeros(len(venues), dtype=bool)
+    for bottom, top, left, right in VENUE_REGIONS.values():
+        inside |= (lat >= bottom) & (lat <= top) & (lon >= left) & (lon <= right)
+    stray = venues[~inside & venues.latitude.notna() & venues.longitude.notna()]
+    if not stray.empty:
+        raise ValueError('Stadium coordinates outside every NFL region (bad row upstream?): '
+                         + ', '.join(f'{r.stadium_id} ({r.latitude:.3f}, {r.longitude:.3f})'
+                                     for r in stray.itertuples()))
+    return venues
+
+
+def load_venues(path=Path('data/weather/stadium_coordinates.parquet')):
+    """stadium_id -> latitude/longitude, downloaded once and cached."""
+    path = Path(path)
+    if path.exists():
+        return check_venues(pd.read_parquet(path))
+    print('Loading stadium coordinates (cached after first pull)...', flush=True)
+    url = 'https://raw.githubusercontent.com/greerreNFL/stadiums/master/data/stadiums.csv'
+    response = requests.get(url, timeout=(10, 45))
+    response.raise_for_status()
+    venues = pd.read_csv(io.StringIO(response.text))[['stadium_id', 'lat', 'lon']]
+    venues = venues.rename(columns={'lat': 'latitude', 'lon': 'longitude'})
+    for stadium_id, fixes in VENUE_CORRECTIONS.items():
+        for column, value in fixes.items():
+            venues.loc[venues.stadium_id.eq(stadium_id), column] = value
+    utils.save_parquet(check_venues(venues), path)
+    return venues
+
+
 def historical_games(seasons):
     """Every completed game in `seasons`, with stadium coordinates and a real
     UTC kickoff -- same construction as scheduled_games(), for the whole
@@ -117,17 +161,7 @@ def historical_games(seasons):
     if missing_kickoff.any():
         print(f'Skipping {int(missing_kickoff.sum())} games with unparseable kickoff time.', flush=True)
     games = games[~missing_kickoff]
-    path = Path('data/weather/stadium_coordinates.parquet')
-    if path.exists():
-        venues = pd.read_parquet(path)
-    else:
-        print('Loading stadium coordinates (cached after first pull)...', flush=True)
-        url = 'https://raw.githubusercontent.com/greerreNFL/stadiums/master/data/stadiums.csv'
-        response = requests.get(url, timeout=(10, 45))
-        response.raise_for_status()
-        venues = pd.read_csv(io.StringIO(response.text))[['stadium_id', 'lat', 'lon']]
-        venues = venues.rename(columns={'lat': 'latitude', 'lon': 'longitude'})
-        utils.save_parquet(venues, path)
+    venues = load_venues()
     games = games.merge(venues, on='stadium_id', how='left', validate='many_to_one')
     missing_coords = games.latitude.isna() | games.longitude.isna()
     if missing_coords.any():
@@ -374,17 +408,7 @@ def scheduled_games(season, week, mode, decision_hours):
         games = games[eligible].copy()
     if games.empty:
         raise ValueError('No games remain before the decision cutoff; use --mode archive for past decisions')
-    path = Path('data/weather/stadium_coordinates.parquet')
-    if path.exists():
-        venues = pd.read_parquet(path)
-    else:
-        print('Loading stadium coordinates (cached after first pull)...', flush=True)
-        url = 'https://raw.githubusercontent.com/greerreNFL/stadiums/master/data/stadiums.csv'
-        response = requests.get(url, timeout=(10, 45))
-        response.raise_for_status()
-        venues = pd.read_csv(io.StringIO(response.text))[['stadium_id', 'lat', 'lon']]
-        venues = venues.rename(columns={'lat': 'latitude', 'lon': 'longitude'})
-        utils.save_parquet(venues, path)
+    venues = load_venues()
     games = games.merge(venues, on='stadium_id', how='left', validate='many_to_one')
     missing = games.latitude.isna() | games.longitude.isna()
     if missing.any():

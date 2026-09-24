@@ -14,17 +14,29 @@ from data_crunchski_3 import (
 )
 
 
-def build_model(n_context=2, n_features=len(FEATURES)):
+# Attribution/display names for the context inputs: 'away_rest_adv' and
+# 'away_travel_adv' are away-minus-home differences, matching how the spread
+# is signed.
+CONTEXT_LABELS = {'home_field': 'home_field_adv', 'rest_advantage': 'away_rest_adv',
+                  'travel_advantage': 'away_travel_adv'}
+
+
+def build_model(n_context=2, n_features=len(FEATURES), n_base=2):
+    """n_base: how many of the context columns are the always-on ones
+    (data_crunchski_3.BASE_CONTEXT -- home field, rest, and travel in Model
+    2.2). They share one unregularized linear layer; anything beyond them is
+    an optional group (stadium/field/referee) and goes through the
+    zero-initialized, regularized layer below instead."""
     from tensorflow import keras
     from model_shredski import create_model
     inputs = keras.Input(shape=(n_features + n_context,))
     matchup = keras.layers.Lambda(lambda x: x[:, :n_features])(inputs)
-    context = keras.layers.Lambda(lambda x: x[:, n_features:n_features+2])(inputs)
+    context = keras.layers.Lambda(lambda x: x[:, n_features:n_features+n_base])(inputs)
     points = create_model(n_features)(matchup)
     adjustment = keras.layers.Dense(1, use_bias=False, name='venue_and_rest')(context)
     terms = [points, adjustment]
-    if n_context > 2:
-        extra = keras.layers.Lambda(lambda x: x[:, n_features+2:])(inputs)
+    if n_context > n_base:
+        extra = keras.layers.Lambda(lambda x: x[:, n_features+n_base:])(inputs)
         terms.append(keras.layers.Dense(1, use_bias=False, kernel_initializer='zeros',
                      kernel_regularizer=keras.regularizers.l2(.1), name='context_groups')(extra))
     model = keras.Model(inputs, keras.layers.Add()(terms))
@@ -32,7 +44,7 @@ def build_model(n_context=2, n_features=len(FEATURES)):
     return model
 
 
-def fit_member(i, x, y, xp, seed, epochs, n_features=len(FEATURES)):
+def fit_member(i, x, y, xp, seed, epochs, n_features=len(FEATURES), n_base=2):
     from modelo_workers import initialize_worker
     initialize_worker()
     # Must precede TensorFlow's first import in each process. Python exceptions
@@ -42,7 +54,7 @@ def fit_member(i, x, y, xp, seed, epochs, n_features=len(FEATURES)):
     from model_shredski import integrated_gradients, permutation_importance, squared_error
     tf.keras.backend.clear_session()
     tf.keras.utils.set_random_seed(seed + i)
-    model = build_model(x.shape[1] - n_features, n_features)
+    model = build_model(x.shape[1] - n_features, n_features, n_base)
     try:
         model.fit(x, y[:, None], epochs=epochs, verbose=0, callbacks=[
             tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=.5, patience=5)])
@@ -89,7 +101,7 @@ def summarize(target, runs, offset):
         result[f'total_attr_away_def_{metric}'] = -result[f'attr_away_def_{metric}']
     context_names = target.attrs.get('context_names', BASE_CONTEXT)
     for j, name in enumerate(context_names, len(features)):
-        feature = {'home_field': 'home_field_adv', 'rest_advantage': 'away_rest_adv'}.get(name, 'context_' + name.split(':')[0])
+        feature = CONTEXT_LABELS.get(name, 'context_' + name.split(':')[0])
         for prefix, sign in [('', -1), ('total_', 1)]:
             key = f'{prefix}attr_{feature}'
             result[key] = result.get(key, 0) + attrs[:count, j] + sign * attrs[count:, j]
@@ -222,7 +234,8 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
     n_features = len(target.attrs['model_features'])
     with parallel_config(backend='loky', n_jobs=min(jobs, iterations), inner_max_num_threads=1):
         runs = list(tqdm(Parallel(return_as='generator', initializer=initialize_worker)(
-            delayed(fit_member)(i, x, y, xp, seed, epochs, n_features) for i in range(iterations)),
+            delayed(fit_member)(i, x, y, xp, seed, epochs, n_features, len(target.attrs['context_names']))
+            for i in range(iterations)),
             total=iterations, desc=f'Two-sided scores ({season} wk{week})'))
     count = len(target)
     scores = np.stack([r[0] for r in runs]) + offset
@@ -251,7 +264,7 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
             return f"away_off_{name[len('own_off_'):]}"
         if name.startswith('own_def_'):
             return f"away_def_{name[len('own_def_'):]}"
-        return {'home_field': 'home_field_adv', 'rest_advantage': 'away_rest_adv'}.get(name, f'context_{name}')
+        return CONTEXT_LABELS.get(name, f'context_{name}')
     for j, name in enumerate(names_all):
         feature = label(name)
         result[f'attr_{feature}'] = attrs[:count, j] - attrs[count:, j]
@@ -347,6 +360,9 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         except Exception as pull_error:
             raise ValueError(f'{error} (auto-pull also failed: {pull_error})') from pull_error
         panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+    if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:   # Model 2.2's input
+        import travel
+        panel = travel.attach_travel(panel)
     target_rows = panel[(panel.season == season) & (panel.week == week)]
     if target_rows.empty:
         raise ValueError(f'{season} wk{week}: not present in the prepared panel')

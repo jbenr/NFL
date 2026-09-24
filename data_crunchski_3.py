@@ -23,6 +23,20 @@ def use_epa(enabled=True):
     return list(METRICS)
 GROUPS = {'stadium': ['stadium_id'], 'field': ['surface', 'roof'], 'referee': ['referee']}
 BASE_CONTEXT = ['home_field', 'rest_advantage']
+# Model 2.2's addition (model_spec selects it): how much further this team
+# travelled to the game than its opponent did, from travel.attach_travel's
+# per-game miles. Measured in thousands of miles so it sits in the same range
+# as a rest-day difference -- context inputs skip standardization and feed a
+# plain linear layer, where a raw 2,700 would swamp the other two.
+TRAVEL_CONTEXT = 'travel_advantage'
+TRAVEL_SCALE = 1000.
+
+
+def use_travel(enabled=True):
+    """Add (or drop) the travel input in the shared BASE_CONTEXT list, in
+    place, so every module that imported it sees the same set."""
+    BASE_CONTEXT[:] = [c for c in BASE_CONTEXT if c != TRAVEL_CONTEXT] + ([TRAVEL_CONTEXT] if enabled else [])
+    return list(BASE_CONTEXT)
 INPUT_MODES = ['separate', 'differential', 'percentile', 'zscore']
 HISTORICAL_WEATHER = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches',
                       'snowfall_inches', 'snow_depth_inches']
@@ -91,6 +105,9 @@ def two_sided_rows(games):
             values['weather_' + column] = games[column].to_numpy()
         values['home_field'] = games.home_field_adv.to_numpy() if side == 'home' else np.zeros(len(games))
         values['rest_advantage'] = games[f'{side}_rest'].to_numpy() - games[f'{opponent}_rest'].to_numpy()
+        if TRAVEL_CONTEXT in BASE_CONTEXT:
+            values[TRAVEL_CONTEXT] = (games[f'{side}_travel_miles'].to_numpy()
+                                      - games[f'{opponent}_travel_miles'].to_numpy()) / TRAVEL_SCALE
         blocks.append(pd.DataFrame(values))
     return pd.concat(blocks, ignore_index=True)
 
@@ -252,7 +269,7 @@ def prepare(games, season, week, groups=(), inputs='separate', metrics=None):
     if not np.isfinite(y).all():
         raise ValueError('Shared scoring requires finite completed training scores')
     x, xp = matchup_representation(train, target, inputs, metrics if metrics is not None else METRICS)
-    context_names = BASE_CONTEXT.copy()
+    context_names = [name for name in BASE_CONTEXT if name in x.columns]
     for group in groups:
         if group == 'referee':
             name = 'referee:prior_total_delta'

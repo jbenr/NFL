@@ -116,6 +116,22 @@ class TwoSidedTests(unittest.TestCase):
                 # Parquet round-trips drop the pre-sort index; compare values, not the index itself.
                 pd.testing.assert_frame_equal(importance.reset_index(drop=True), cached_importance.reset_index(drop=True))
 
+    def test_travel_input_gets_its_own_attribution_and_still_reconciles(self):
+        """Model 2.2: a third base-context input widens the linear context
+        layer (build_model's n_base), so completeness has to survive it."""
+        dc.use_travel(True)
+        self.addCleanup(dc.use_travel, False)
+        data = fixture()
+        data['away_travel_miles'] = np.linspace(400., 2600., len(data))
+        data['home_travel_miles'] = 0.
+        with tempfile.TemporaryDirectory() as folder, patch.object(utils, 'cache_path', return_value=Path(folder) / 'test.parquet'):
+            details, importance = ss.fit_two_sided(data, 2026, 1, iterations=2, epochs=1, jobs=1)
+        self.assertIn('attr_away_travel_adv', details)
+        self.assertIn('total_attr_away_travel_adv', details)
+        self.assertIn('travel_advantage', importance.feature.values)
+        self.assertTrue((details.integration_residual.abs() < .05).all())
+        self.assertTrue((details.total_integration_residual.abs() < .05).all())
+
     def test_attribution_schema_matches_summarize_and_explains_the_prediction(self):
         # The real correctness check for fit_two_sided's attribution
         # derivation (see its docstring): if the cross-slot signs were

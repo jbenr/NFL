@@ -23,18 +23,29 @@ NAME = 'Model'
 # select() switches between them; nothing else in the pipeline hard-codes a
 # version, so both stay runnable side by side and write to separate folders.
 VERSIONS = {
-    '2.0': dict(epa=False, changes=[
+    '2.0': dict(epa=False, travel=False, changes=[
         'Weather inputs cut from 7 (feels-like, wind, precipitation, rain, snowfall, snow depth, indoor flag) '
         'to 3: feels-like, wind, precipitation.',
         'Renamed from "two-sided-team-points-v1"; results moved from data/results/packet_shared/ to '
         'data/results/model_2.0/.']),
-    '2.1': dict(epa=True, changes=[
+    '2.1': dict(epa=True, travel=False, changes=[
         'Adds four EPA inputs per team, split by play type: pass and run EPA per play, and pass and run '
         'success rate (the share of plays with positive EPA). EPA comes from nflverse\'s expected-points '
         'model, which credits down, distance and field position rather than raw yards.',
         'Split rather than combined because overall EPA per play correlates about 0.97 with its passing half '
         'alone, so a single number would bury the run signal (pass and run EPA correlate about 0.67).',
         'Everything else matches Model 2.0: same network, weather inputs, training window and lookback.']),
+    '2.2': dict(epa=False, travel=True, changes=[
+        "Adds a travel-distance input, built like the existing rest-day one: each team's great-circle miles from "
+        'the stadium it calls home that season to the stadium this game is played in, differenced between the two '
+        'teams. The home team is normally 0, so the away team carries the whole trip; at a neutral site (London, '
+        'Mexico City, Melbourne) both teams travel and only the difference counts. A displaced season -- New '
+        'Orleans in 2005, Minnesota after the 2010 roof collapse -- measures from the venue that team actually '
+        'hosted most that year.',
+        'Fed in thousands of miles through the same unstandardized linear context layer as home field and rest, so '
+        'the three stay on comparable scales.',
+        'Built on Model 2.0, not 2.1: EPA is off here so the travel input can be measured on its own against the '
+        '2.0 backtest. Turn both on by setting epa=True for this version in VERSIONS.']),
 }
 VERSION = '2.0'
 LABEL = f'{NAME} {VERSION}'
@@ -57,6 +68,7 @@ def select(version):
     RESULTS = Path(f'data/results/model_{VERSION}')
     CHANGES = VERSIONS[VERSION]['changes']
     dc3.use_epa(VERSIONS[VERSION]['epa'])
+    dc3.use_travel(VERSIONS[VERSION]['travel'])
     return VERSION
 
 
@@ -134,14 +146,21 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
             'context': {
                 'home_field': '1 for the home team, 0 for the away team and at neutral sites; learned weight x value',
                 'rest_advantage': 'this team\'s rest days minus the opponent\'s; learned weight x value',
+                **({'travel_advantage': ("this team's travel minus the opponent's, in thousands of great-circle "
+                                         "miles from each team's home stadium that season to this game's stadium "
+                                         '(home team normally 0, both teams travelling at a neutral site); learned '
+                                         'weight x value')}
+                   if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT else {}),
             },
             'preparation': ('network inputs are standardized with the training games\' mean and standard deviation; '
-                            'missing values are filled with the training median. Home field and rest are not standardized.'),
+                            'missing values are filled with the training median. The context inputs ('
+                            + ', '.join(dc3.BASE_CONTEXT) + ') are not standardized.'),
             'network_input_count': n,
         },
         'network': {
             'layers': f'dropout 0.10, dense {layers[0]} (ELU), dense {layers[1]} (ELU), dense {layers[2]} (ELU), dense 1',
-            'context_layer': 'home field and rest go through a separate linear layer with no bias, added to the output',
+            'context_layer': ('the context inputs (' + ', '.join(dc3.BASE_CONTEXT)
+                              + ') go through a separate linear layer with no bias, added to the output'),
             'target': 'team points minus the training average',
             'loss': 'mean squared error',
             'optimizer': 'Adam (amsgrad), learning rate halved after 5 epochs without improvement',
@@ -152,13 +171,14 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
             **{market: f'edge >= {rule["diff_cutoff"]:g} points'
                        + (f' and SD <= {rule["sd_cutoff"]:.2f}' if rule.get('sd_cutoff') else ' (no SD condition)')
                for market, rule in cutoffs.items()},
-            'provenance': (f'checked on {LABEL}\'s 16-season backtest (data/bt/model_2.0/2010-2025: 4363 '
-                           'games). Totals: no edge in weeks 1-4 (49.1%), 55.2% from week 5 on (n=888, four of '
-                           'four eras above break-even) and 60.5% in weeks 13-14. Spreads: 58.0% in weeks 13-14 '
-                           'and the playoffs (n=335, four of four eras), 49.9% otherwise -- no edge. A '
-                           'walk-forward check over 2014-2025 (rule chosen on prior seasons only) returns +6.3% '
-                           'roi on totals and -2.2% on spreads. Break-even is 52.4%; the pick tiers on the sheet '
-                           'carry these rates.'),
+            'provenance': (f'checked on the 16-season backtest (data/bt/model_2.0/2010-2025: 4363 games). '
+                           'Totals: no edge in weeks 1-4 (49.1%), 55.2% from week 5 on (n=888) and 60.5% in '
+                           'weeks 13-14. Spreads: 60.0% in weeks 13-14 and the playoffs when the ensemble also '
+                           'agrees with itself (SD <= 4.5, n=233), 49.1% otherwise -- no edge. Those two windows '
+                           'hold in both halves of the record and across the carryover and steep runs; threshold '
+                           'sweeps of edge, SD and game importance did not survive the same checks (the best cell '
+                           'of a 41-cell sweep reaches 59.7% on shuffled outcomes). Break-even is 52.4%; the pick '
+                           'tiers on the sheet carry these rates.'),
         },
         'attributions': {
             'method': 'integrated gradients (64 steps), per member, averaged across the ensemble',
@@ -178,6 +198,7 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
                          'kickoff time are shown for reference and are not model inputs'),
         'data': {'play_by_play': 'nflverse (nfl_data_py), data/pbp/pbp_{season}.parquet',
                  'schedule_and_lines': modified('data/sched.parquet'),
+                 'stadium_coordinates': modified('data/weather/stadium_coordinates.parquet'),
                  'historical_weather': modified(weather_file), 'forecast_weather': modified(forecast_file)},
         'changes_from_previous_version': CHANGES,
     }
