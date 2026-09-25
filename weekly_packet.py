@@ -228,6 +228,8 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .tier-legend strong{font:12px Graduate,Georgia,serif;color:#e3e6e9}
 .tier-key{display:flex;align-items:center;gap:6px}
 .tier-key i{display:inline-block;width:10px;height:10px;border-radius:2px;flex:0 0 auto}
+/* The dash entry: an empty outline, because it marks the absence of a pick. */
+.tier-swatch-none{border:1px solid #6b7480;background:transparent}
 .tier-note{color:#8e99a5}
 @media(max-width:650px){.tier-legend{align-items:flex-start;text-align:left}}
 /* The expandable key under the sheet (tier_guide). */
@@ -242,6 +244,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .tier-table .tier-record{color:#b7c0c9;white-space:nowrap}
 .tier-note-row td{color:#8e99a5;border-bottom:1px solid #23272c;padding-top:0}
 .tier-chip{display:inline-block;width:20px;text-align:center;border-radius:3px;color:#222;font-weight:700}
+.tier-chip-none{border:1px dashed #6b7480;color:#9aa4ae;font-weight:400}
 .tier-guide .tier-note{color:#8e99a5;margin:12px 0 0}
 @media(max-width:650px){.tier-table th:nth-child(4),.tier-table td:nth-child(4),
 .tier-table th:nth-child(5),.tier-table td:nth-child(5){display:none}.tier-guide summary{text-align:left}}
@@ -302,7 +305,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 #stats-mode-raw:checked~#stats-view-raw{display:block}
 #stats-mode-model:checked~#stats-view-model{display:block}
 .banner-team .team-copy{display:flex;flex-direction:column}.banner-qb{font:11px/1.4 Arial,sans-serif;color:#aaa;white-space:normal;margin-top:4px}
-.packet .pill.pick{background:#ffe590;color:#222}.pill.pick.tier-S{background:#e3c4ff}.pill.pick.tier-A{background:#b9e4c4}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
+.packet .pill.pick{background:#cfd5db;color:#222}.pill.pick.tier-S{background:#e3c4ff}.pill.pick.tier-A{background:#b9e4c4}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
 .sheet-notes p{font-size:13px;line-height:1.5;color:#c8cdd3;margin:10px 0}.sheet-notes strong{color:#eee}
 .pick-header{overflow-x:auto;border-bottom:1px solid #333;padding:10px 0 16px;margin-bottom:12px}
 .pick-grid{display:grid;grid-template-columns:160px repeat(5,minmax(60px,1fr)) 160px;min-width:700px;align-items:center;gap:6px 8px;text-align:center;font-variant-numeric:tabular-nums}
@@ -975,8 +978,8 @@ def game_header(row, market, action):
     if action == 'PASS':
         pick = '–'
     else:
-        tier = pick_tier(market, row.week, row.get('total_game_importance'), float(np.sqrt(row.variance)),
-                         row.get('market_base'))
+        tier = row.get('tier') or pick_tier(market, row.week, row.get('total_game_importance'),
+                                           float(np.sqrt(row.variance)), row.get('market_base'))
         pick = f'<span class="pill pick tier-{tier}" title="{escape(tier)} confidence">{escape(action)}</span>'
     scores = ''
     if pd.notna(row.get('away_points')) and pd.notna(row.get('home_points')):
@@ -1123,70 +1126,96 @@ HIGH_CONFIDENCE_CUTOFFS = {
 }
 
 
-# Confidence tiers. Every rule below was measured on ONE backtest -- Model 2.0
-# with 'weighted' stats and a 20-week lookback, 2010-2025, 4363 games
-# (TIER_SOURCE) -- and the same rules were checked against the carryover and
-# steep-lookback-10 runs, which agree within a point or two. Break-even is
-# 52.4%. A pick has to clear its market's edge first (PICK_TIERS['edge']);
-# the tier then says what that rule has been worth historically.
+# Confidence tiers. A bucket's letter is measured, not assigned: each bucket
+# below carries the hit rate it posted on ONE backtest -- Model 2.0 with
+# 'weighted' stats and a 20-week lookback, 2010-2025, 4363 games (TIER_SOURCE)
+# -- and TIER_BANDS turns that rate into S, A or B. Re-measure after a new
+# backtest, edit the rate, and the letter follows by itself.
 #
-# What drives the tiers is not the model's own confidence but the situation:
+# A bucket under B's floor is not a weak pick, it is no pick: the sheet prints
+# a dash and the game is not graded (see NO_PICK). Break-even at -110 is 52.4%,
+# so B's floor sits a point and a half above water, not at it.
+#
+# What separates the buckets is the situation, not the model's own confidence:
 # how late in the season it is (in September the 20-week lookback is mostly
-# last season), whether the ensemble agrees with itself (spread only), and
-# where the market priced the total (totals only).
+# last season), whether the ensemble agrees with itself (spread), and where the
+# market priced the total (totals).
+#
+# Every rate here comes from TIER_SOURCE and nothing else -- no averaging
+# across runs. Each bucket's 'siblings' field is the same bucket measured on
+# the other three completed backtests (carryover, steep-lookback, and Model
+# 2.1 with importance weighting). Those are different models, not re-runs, so
+# they do not set the letter; they are there because a bucket its siblings
+# disagree with is a bucket to size down. Where they spread wide, the shipped
+# rate is probably the optimistic end.
 TIER_SOURCE = 'Model 2.0 (weighted, 20-week lookback) backtest, 2010-2025: 4363 games'
-PICK_TIERS = {
-    'spread': dict(edge=3.0, tiers=[
-        ('S', lambda week, importance, sd, line: (13 <= week <= 14 or week >= 19) and (sd is None or sd <= 4.5)),
-        ('B', lambda week, importance, sd, line: True)]),
-    'total': dict(edge=5.0, tiers=[
-        # 42-46 is a dead band for this model: those picks hit 47.8% while the
-        # rest hit 59.8%, in all four eras and on every run. It shows up at
-        # every edge level (48.1% even with no edge filter at all), and only on
-        # the VEGAS total -- bucketing by the model's own number finds nothing.
-        ('S', lambda week, importance, sd, line: 13 <= week <= 14 and not dead_total(line)),
-        ('A', lambda week, importance, sd, line: week >= 5 and not dead_total(line)),
-        ('B', lambda week, importance, sd, line: True)]),
-}
+TIER_BANDS = [('S', .600), ('A', .575), ('B', .540)]
 DEAD_TOTAL = (42.0, 46.0)
-TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
-# rule: what earns the tier. record/eras/volume: how it did in TIER_SOURCE.
-TIER_GUIDE = {
-    'spread': {
-        'qualify': 'the model disagrees with the spread by at least 3 points',
-        'S': dict(rule='week 13-14 or the playoffs, and the ensemble agrees with itself (SD at most 4.5)',
-                  record='60.0% of 233 picks, +16.2% per bet', volume='about 15 a season',
-                  eras='60 / 62 / 49 / 67% across four-season eras',
-                  note='The SD condition earns its place: the same weeks without it are 58.0%, and the '
-                       'high-SD games it drops are 53.9%. It holds in both halves of the record.'),
-        'B': dict(rule='every other qualifying pick', record='49.1% of 2046 picks, -4.5% per bet',
-                  volume='about 128 a season', eras='47 / 47 / 52 / 50%',
-                  note='No era above break-even. Spreads before week 13 carry no measurable information: '
-                       'the model disagreeing with the market there predicts nothing. Shown for reference.'),
-    },
-    'total': {
-        'qualify': 'the model disagrees with the total by at least 5 points, and the posted total is outside 42-46',
-        'S': dict(rule='week 13-14, posted total outside 42-46',
-                  record='64.0% of 89 picks, +23.7% per bet', volume='about 6 a season',
-                  eras='52 / 65 / 71 / 65%',
-                  note='The smallest and strongest bucket; thin enough that a quiet season is normal.'),
-        'A': dict(rule='week 5 on, posted total outside 42-46',
-                  record='59.0% of 498 picks, +14.2% per bet', volume='about 31 a season',
-                  eras='61 / 55 / 58 / 61%',
-                  note='Above break-even in all four eras. A walk-forward check (rule picked on earlier '
-                       'seasons only, applied to the next) chose the 42-46 skip in 12 of 12 seasons and '
-                       'returned 59.9%, so this is not a hindsight fit.'),
-        'B': dict(rule='weeks 1-4, or a posted total of 42-46 in any week',
-                  record='49.5% of 570 picks, -3.8% per bet', volume='about 36 a season',
-                  eras='47 / 53 / 52 / 47%',
-                  note='Two different dead spots pooled: September, when the lookback is mostly last '
-                       'season, and the 42-46 band, where this model is wrong in every era.'),
-    },
+PICK_BUCKETS = {
+    'spread': dict(edge=3.0, buckets=[
+        dict(rule='week 13-14 or the playoffs, ensemble SD at most 4.5',
+             test=lambda week, importance, sd, line: (13 <= week <= 14 or week >= 19) and (sd is None or sd <= 4.5),
+             rate=.600, n=230, volume='about 14 a season', eras='60 / 62 / 49 / 67%',
+             siblings='carryover 56.9%, steep 52.4%, 2.1-importance 49.4% (n=85)',
+             note='The SD condition earns its place: the same weeks without it are 58.0%, and the high-SD '
+                  'games it drops are 53.9% -- right under the floor. Holds in both halves of this run\'s '
+                  'record, but the siblings run 3-10 points lower, so treat 60% as the top of the range '
+                  'rather than the expectation.'),
+        dict(rule='weeks 15-18, ensemble SD at most 3.75',
+             test=lambda week, importance, sd, line: 15 <= week <= 18 and (sd is None or sd <= 3.75),
+             rate=.549, n=133, volume='about 8 a season', eras='– / 57 / 60 / 53%',
+             siblings='carryover 55.9%, steep 56.0%, 2.1-importance 65.5% (n=29)',
+             note='Late-season picks need a tighter ensemble than weeks 13-14 do: at SD above 3.75 these same '
+                  'weeks are 44.9%, the worst bucket in the model. The steadiest bucket across the siblings '
+                  '(54.9 / 55.9 / 56.0%) and across both halves of the record (54 / 55%) -- modest, but the '
+                  'one whose rate moves least when the model changes.'),
+    ]),
+    'total': dict(edge=5.0, buckets=[
+        dict(rule='week 13-14 or the playoffs, posted total outside 42-46',
+             test=lambda week, importance, sd, line: (13 <= week <= 14 or week >= 19) and not dead_total(line),
+             rate=.646, n=113, volume='about 7 a season', eras='54 / 62 / 72 / 66%',
+             siblings='carryover 63.7%, steep 64.6%, 2.1-importance 55.7%',
+             note='The strongest bucket in the system, and above break-even in all four eras.'),
+        dict(rule='weeks 5-8, posted total outside 42-46',
+             test=lambda week, importance, sd, line: 5 <= week <= 8 and not dead_total(line),
+             rate=.600, n=160, volume='about 10 a season', eras='58 / 59 / 59 / 63%',
+             siblings='carryover 60.0%, steep 52.5%, 2.1-importance 53.0%',
+             note='The flattest record of any bucket on this run -- every era within five points of the '
+                  'average -- and the model’s only edge in the part of the season the spread side cannot '
+                  'touch. The carryover run matches it exactly; the steep and 2.1 runs do not, which says the '
+                  'stat-weighting choice matters more here than anywhere else on the board.'),
+        dict(rule='weeks 9-12, posted total outside 42-46',
+             test=lambda week, importance, sd, line: 9 <= week <= 12 and not dead_total(line),
+             rate=.595, n=158, volume='about 10 a season', eras='59 / 55 / 65 / 57%',
+             siblings='carryover 58.5%, steep 57.7%, 2.1-importance 55.4%',
+             note='Same shape as weeks 5-8, half a point lower, which is the width of the A/S line rather '
+                  'than a real difference between them.'),
+        dict(rule='weeks 15-18, posted total outside 42-46',
+             test=lambda week, importance, sd, line: 15 <= week <= 18 and not dead_total(line),
+             rate=.563, n=151, volume='about 9 a season', eras='65 / 52 / 43 / 62%',
+             siblings='carryover 54.8%, steep 52.7%, 2.1-importance 50.5%',
+             note='The weakest era here (43% in 2018-21) is the reason this is a B and not an A: the average '
+                  'is fine, one four-season stretch was not. Adding an SD condition lifts it but leaves too '
+                  'few games to trust.'),
+    ]),
 }
-TIER_RECORD = {market: {tier: guide[tier]['rule'] for tier in 'SAB' if tier in guide}
-               for market, guide in TIER_GUIDE.items()}
-TIER_HISTORY = {market: {tier: guide[tier]['record'].split(',')[0] for tier in 'SAB' if tier in guide}
-                for market, guide in TIER_GUIDE.items()}
+# What the buckets deliberately leave out, and what it would have cost.
+NO_PICK = {
+    'spread': dict(rule='weeks 1-12 in any form, plus weeks 13-18 where the ensemble disagrees with itself',
+                   record='48.7% of 1862 would-be picks, -7.1% per bet', volume='about 116 a season',
+                   eras='47 / 47 / 52 / 50%',
+                   note='No era above break-even. Spreads before week 13 carry no measurable information -- '
+                        'an edge x SD sweep across all four backtest runs finds no cell that clears 54% in '
+                        'every run, and the tightest-SD games there are the worst of the lot.'),
+    'total': dict(rule='weeks 1-4, or a posted total of 42-46 in any week',
+                  record='49.5% of 564 would-be picks, -5.6% per bet', volume='about 35 a season',
+                  eras='47 / 53 / 52 / 47%',
+                  note='Two dead spots pooled: September, when the 20-week lookback is mostly last season '
+                       '(46.9%, and 37-41% in the older eras), and the 42-46 band, where this model is wrong '
+                       'in every era.'),
+}
+TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
+BAND_LABELS = {'S': '60%+', 'A': '57.5-60%', 'B': '54-57.5%'}
 
 
 def dead_total(line):
@@ -1194,49 +1223,96 @@ def dead_total(line):
     return line is not None and pd.notna(line) and DEAD_TOTAL[0] <= float(line) <= DEAD_TOTAL[1]
 
 
-def pick_tier(market, week, importance=None, sd=None, line=None):
-    """S, A or B for a qualifying pick -- see PICK_TIERS and TIER_GUIDE.
-    sd: the ensemble's disagreement. line: the market's own number (the posted
-    total, or the spread). Either being None never blocks a tier."""
-    for name, applies in PICK_TIERS[market]['tiers']:
-        if applies(int(week), importance, sd, line):
+def tier_band(rate):
+    """The letter a measured hit rate earns, or None below the bottom band."""
+    for name, floor in TIER_BANDS:
+        if rate >= floor:
             return name
-    return 'B'
+    return None
+
+
+def pick_bucket(market, week, importance=None, sd=None, line=None):
+    """The first bucket this pick falls in, or None if none covers it."""
+    for bucket in PICK_BUCKETS[market]['buckets']:
+        if bucket['test'](int(week), importance, sd, line):
+            return bucket
+    return None
+
+
+def pick_tier(market, week, importance=None, sd=None, line=None):
+    """This pick's tier (S, A or B), or None when no bucket covers it -- which
+    means it is not a pick at all; see NO_PICK. sd: the ensemble's
+    disagreement. line: the market's own number (the posted total, or the
+    spread). Either being None never blocks a bucket."""
+    bucket = pick_bucket(market, week, importance, sd, line)
+    return tier_band(bucket['rate']) if bucket else None
+
+
+def apply_tiers(frame, market):
+    """Tier every settled row, and let the tier decide what counts as a pick:
+    an edge big enough to clear the threshold is necessary but not sufficient,
+    because outside the buckets this model loses money (NO_PICK). Rows that no
+    bucket covers keep qualifies=False and print a dash."""
+    data = frame.copy()
+    variance = data.variance if 'variance' in data else pd.Series(np.nan, index=data.index)
+    sd = np.sqrt(variance.clip(lower=0))
+    importance = (data.total_game_importance if 'total_game_importance' in data
+                  else pd.Series(np.nan, index=data.index))
+    data['tier'] = [pick_tier(market, week, imp, None if pd.isna(s) else float(s), line)
+                    for week, imp, s, line in zip(data.week, importance, sd, data.market_base)]
+    data['qualifies'] = data.qualifies & data.tier.notna()
+    return data
 
 
 def tier_guide():
-    """The expandable key under the sheet: every tier's rule and record."""
+    """The expandable key under the sheet: every bucket, its measured rate and
+    the band that rate earns it."""
     sections = []
-    for market, guide in TIER_GUIDE.items():
-        rows = ''.join(
-            f'<tr><td><span class="tier-chip" style="background:{TIER_COLORS[tier]}">{tier}</span></td>'
-            f'<td>{escape(guide[tier]["rule"])}</td><td class="tier-record">{escape(guide[tier]["record"])}</td>'
-            f'<td class="tier-record">{escape(guide[tier]["volume"])}</td>'
-            f'<td class="tier-record">{escape(guide[tier]["eras"])}</td></tr>'
-            f'<tr class="tier-note-row"><td></td><td colspan="4">{escape(guide[tier]["note"])}</td></tr>'
-            for tier in 'SAB' if tier in guide)
+    for market, spec in PICK_BUCKETS.items():
+        rows = ''
+        for bucket in sorted(spec['buckets'], key=lambda b: -b['rate']):
+            tier = tier_band(bucket['rate'])
+            rows += (f'<tr><td><span class="tier-chip" style="background:{TIER_COLORS[tier]}">{tier}</span></td>'
+                     f'<td>{escape(bucket["rule"])}</td>'
+                     f'<td class="tier-record">{100 * bucket["rate"]:.1f}% of {bucket["n"]} picks</td>'
+                     f'<td class="tier-record">{escape(bucket["volume"])}</td>'
+                     f'<td class="tier-record">{escape(bucket["eras"])}</td>'
+                     f'<td class="tier-record">{escape(bucket["siblings"])}</td></tr>'
+                     f'<tr class="tier-note-row"><td></td><td colspan="5">{escape(bucket["note"])}</td></tr>')
+        skip = NO_PICK[market]
+        rows += (f'<tr><td><span class="tier-chip tier-chip-none">–</span></td>'
+                 f'<td>{escape(skip["rule"])}</td><td class="tier-record">{escape(skip["record"])}</td>'
+                 f'<td class="tier-record">{escape(skip["volume"])}</td>'
+                 f'<td class="tier-record">{escape(skip["eras"])}</td><td class="tier-record">—</td></tr>'
+                 f'<tr class="tier-note-row"><td></td><td colspan="5">{escape(skip["note"])}</td></tr>')
         sections.append(
             f'<h4>{escape(market.title())} picks</h4>'
-            f'<p class="tier-qualify">A pick appears when {escape(guide["qualify"])}.</p>'
-            '<table class="tier-table"><thead><tr><th></th><th>Earns the tier</th><th>Record</th>'
-            '<th>Volume</th><th>By era</th></tr></thead><tbody>' + rows + '</tbody></table>')
+            f'<p class="tier-qualify">A pick needs the model to disagree with the market by at least '
+            f'{spec["edge"]:g} points, and to land in one of these buckets.</p>'
+            '<table class="tier-table"><thead><tr><th></th><th>Bucket</th><th>Measured</th>'
+            '<th>Volume</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
+            + rows + '</tbody></table>')
+    bands = ', '.join(f'{tier} = {BAND_LABELS[tier]}' for tier, _ in TIER_BANDS)
     return ('<details class="tier-guide"><summary>What the pick colours mean</summary>'
+            f'<p class="tier-qualify">The letter is the bucket’s measured hit rate, not a judgement: '
+            f'{bands}, and under 54% is no pick at all.</p>'
             + ''.join(sections)
-            + f'<p class="tier-note">Measured on the {escape(TIER_SOURCE)}, and checked against the carryover '
-              'and steep-lookback runs, which agree within a point or two. Break-even at -110 is 52.4%, so a '
-              'tier below that is information, not an edge. Hit rates are what the rule did historically, not '
-              'a forecast for any single pick.</p></details>')
+            + f'<p class="tier-note">Every rate is measured on the {escape(TIER_SOURCE)} — the run this packet '
+              'builds — and nothing is averaged across models. "Other runs" is the same bucket on the carryover, '
+              'steep-lookback and Model 2.1 backtests: different models, shown so you can see which buckets '
+              'survive a change of model and which do not. Break-even at -110 is 52.4%. The dash row is not a weak pick, it is no '
+              'pick: those games lose money, so the sheet leaves them blank rather than grading them. Hit rates '
+              'are what a bucket did historically, not a forecast for any single pick.</p></details>')
 
 
 def tier_legend(markets=('spread', 'total')):
-    """The small colour key in the corner of the sheet."""
-    items = ''.join(
-        f'<span class="tier-key"><i style="background:{TIER_COLORS[tier]}"></i>{escape(tier)} '
-        + escape(' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}'
-                            for market in markets if tier in TIER_RECORD[market]))
-        + '</span>' for tier in ['S', 'A', 'B'])
-    return (f'<div class="tier-legend"><strong>Confidence</strong>{items}'
-            f'<span class="tier-note">Hit rates: {escape(TIER_SOURCE)}. Break-even is 52.4%.</span></div>')
+    """The small colour key in the corner of the sheet: the bands themselves,
+    since a letter now means one thing in both markets."""
+    items = ''.join(f'<span class="tier-key"><i style="background:{TIER_COLORS[tier]}"></i>'
+                    f'{escape(tier)} {escape(BAND_LABELS[tier])}</span>' for tier, _ in TIER_BANDS)
+    return (f'<div class="tier-legend"><strong>Hit rate</strong>{items}'
+            '<span class="tier-key"><i class="tier-swatch-none"></i>– under 54%, no bet</span>'
+            f'<span class="tier-note">Measured on the {escape(TIER_SOURCE)}. Break-even is 52.4%.</span></div>')
 
 
 def copy_picks_widget(season, week, light_table):
@@ -1253,9 +1329,8 @@ def copy_picks_widget(season, week, light_table):
     right-click (desktop) or long-press (phone) to copy or save. When a
     script copy succeeds, the click is cancelled before the checkbox flips."""
     subtitle = f'{int(season)} Week {int(week)}'
-    legend = [(TIER_COLORS[tier], f'{tier}  ' + ' · '.join(f'{market} {TIER_RECORD[market][tier]} {TIER_HISTORY[market][tier]}'
-                                                            for market in ['spread', 'total'] if tier in TIER_RECORD[market]))
-              for tier in ['S', 'A', 'B']]
+    legend = [(TIER_COLORS[tier], f'{tier}  hit rate {BAND_LABELS[tier]}') for tier, _ in TIER_BANDS]
+    legend.append(('#ffffff', '–  under 54%, no bet'))
     png, width = picks_png(light_table, 'Model', subtitle, legend=legend)
     return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
            '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksImage(event)">'
@@ -1451,7 +1526,8 @@ def headline_table(folder, light=False):
         path = folder / f'{market}_details.csv'
         if path.exists():
             cutoffs = HIGH_CONFIDENCE_CUTOFFS[market]
-            frames[market] = settle(pd.read_csv(path), cutoffs['diff_cutoff'], cutoffs['sd_cutoff'])
+            frames[market] = apply_tiers(settle(pd.read_csv(path), cutoffs['diff_cutoff'],
+                                                cutoffs['sd_cutoff']), market)
     if not frames:
         return ''
     base = next(iter(frames.values()))
@@ -1462,7 +1538,7 @@ def headline_table(folder, light=False):
     def market_fields(frame, g, market):
         match = frame[(frame.away_team == g.away_team) & (frame.home_team == g.home_team)] if frame is not None else None
         if match is None or match.empty:
-            return dict(line=np.nan, model=np.nan, diff=np.nan, sd=np.nan, pick=''), None
+            return dict(line=np.nan, model=np.nan, diff=np.nan, sd=np.nan, tier=None, pick=''), None
         r = match.iloc[0]
         pick = (r.away_team if r.edge > 0 else r.home_team) if market == 'spread' else ('OVER' if r.edge > 0 else 'UNDER')
         pick = pick if bool(r.qualifies) else 'PASS'
@@ -1472,7 +1548,8 @@ def headline_table(folder, light=False):
         # Total has no team-perspective concept, so it's left alone.
         sign = -1 if market == 'spread' else 1
         return (dict(line=sign * r.market_base, model=sign * r.prediction, diff=abs(r.edge), sd=r.sd,
-                     market_line=r.market_base, pick=pick), (pick if pick != 'PASS' else None))
+                     market_line=r.market_base, tier=r.get('tier'), pick=pick),
+                (pick if pick != 'PASS' else None))
 
     rows = []
     picks = set()
@@ -1494,10 +1571,8 @@ def headline_table(folder, light=False):
             diff=spread['diff'], pick=spread['pick'],
             total=total['line'], total_prediction=total['model'],
             total_diff=total['diff'], total_pick=total['pick'],
-            spread_tier=pick_tier('spread', g.week, g.get('total_game_importance'), spread['sd'],
-                                  spread['market_line']) if spread_pick else '',
-            total_tier=pick_tier('total', g.week, g.get('total_game_importance'), total['sd'],
-                                 total['market_line']) if total_pick else ''))
+            spread_tier=(spread['tier'] or '') if spread_pick else '',
+            total_tier=(total['tier'] or '') if total_pick else ''))
     table = pd.DataFrame(rows)
     table['gameday'] = pd.to_datetime(table.gameday)
     table['gametime'] = pd.to_datetime(table.gametime, format='%H:%M', errors='coerce').dt.time
@@ -1541,7 +1616,7 @@ def headline_table(folder, light=False):
     # gameday/gametime/away_logo/away_team/spread/prediction/home_team/
     # home_logo/diff/pick, then O/U's total/total_prediction/total_diff/
     # total_pick. No SD column in either market -- the pick's tier colour
-    # (PICK_TIERS) is the confidence signal now. relabel_index
+    # (PICK_BUCKETS) is the confidence signal now. relabel_index
     # only changes the displayed header text -- .format()/.map() below
     # still key off the real column names. background_gradient/
     # highlight_picks need per-cell inline styles since they're data-dependent.
@@ -1604,7 +1679,7 @@ def write_packets(predictions, panel, importance, config, root):
         header = packet_tabs(market) + f'<h1>{title}</h1>'
         from backtester import settle
         cutoffs = HIGH_CONFIDENCE_CUTOFFS[market]
-        games = settle(games, cutoffs['diff_cutoff'], cutoffs['sd_cutoff'])
+        games = apply_tiers(settle(games, cutoffs['diff_cutoff'], cutoffs['sd_cutoff']), market)
         cards = []
         for _, row in games.iterrows():
             lean = (row.away_team if row.edge > 0 else row.home_team) if market == 'spread' else ('OVER' if row.edge > 0 else 'UNDER')
@@ -1632,11 +1707,13 @@ def write_packets(predictions, panel, importance, config, root):
             ('Picks', 'A pick needs an edge of at least '
                       + (f'{cutoffs["diff_cutoff"]:g} points'
                          + (f' and an SD of at most {cutoffs["sd_cutoff"]:.2f}' if cutoffs.get('sd_cutoff') else ''))
-                      + '; otherwise PICK shows –. Its colour is the confidence tier: '
-                      + ', '.join(f'{tier} = {TIER_RECORD[market][tier]}, {TIER_HISTORY[market][tier]} in the backtest'
-                                  for tier in ['S', 'A', 'B'] if tier in TIER_RECORD[market])
-                      + '. Break-even is 52.4%. Lines are stored market lines, not live odds, and starting QBs '
-                        'aren’t verified.'),
+                      + ', and it has to land in a bucket the backtest measured above 54%: '
+                      + '; '.join(f'{tier_band(b["rate"])} {b["rule"]} ({100 * b["rate"]:.1f}%)'
+                                  for b in sorted(PICK_BUCKETS[market]['buckets'], key=lambda b: -b['rate']))
+                      + f'. Anything else shows – and is not a bet: {NO_PICK[market]["record"]}, no era above '
+                        'break-even. The letter is the bucket’s measured rate (S 60%+, A 57.5-60%, B 54-57.5%), '
+                        'not a judgement about this game. Break-even is 52.4%. Lines are stored market lines, '
+                        'not live odds, and starting QBs aren’t verified.'),
             ('Numbers', f'{"ModelLine" if spread_page else "Model O/U"} and the predicted scores are averages across the '
                         'model’s ensemble; SD is how much its runs disagree, not game risk. QB Elo is the scheduled '
                         f'starter’s recency-weighted rating going into the game. Stat ranks use pregame rates over the previous {config["lookback"]} '
