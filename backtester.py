@@ -425,6 +425,7 @@ def compare(args):
     import data_crunchski_3 as dc3
     version = getattr(args, 'model_version', 'legacy')
     versioned = version != 'legacy'
+    normalize = getattr(args, 'normalize', 'raw')
     lookback = args.lookback if versioned else 20
     calculation = (args.calculation or 'weighted') if versioned else 'mean'
     train_window = args.train_window if versioned else 20
@@ -436,12 +437,14 @@ def compare(args):
         import travel
         panel = travel.attach_travel(panel)
     if versioned:
-        print(f'{version} / {args.model}: {args.inputs} inputs, {calculation} stats, lookback {lookback}, '
+        print(f'{version} / {args.model}: {args.inputs} inputs on a {normalize} scale, {calculation} stats, '
+              f'lookback {lookback}, '
               f'training window {train_window} REG weeks\n'
               f'  {len(dc3.METRICS)} metrics ({", ".join(dc3.METRICS[-4:])}...), '
               f'context {", ".join(dc3.BASE_CONTEXT)}\n  Output: {root}', flush=True)
         (root / 'config.json').write_text(json.dumps(dict(
-            model=args.model, model_version=version, inputs=args.inputs, lookback=lookback,
+            model=args.model, model_version=version, inputs=args.inputs, normalize=normalize,
+            lookback=lookback,
             calculation=calculation, train_window=train_window, start_season=args.start_season,
             season=args.season, week=args.week, iterations=args.iterations, seed=args.seed,
             groups=list(args.groups), metrics=list(dc3.METRICS), context=list(dc3.BASE_CONTEXT),
@@ -479,10 +482,12 @@ def compare(args):
             print(f'{name}: {season} wk{week}', flush=True)
             if joint:
                 target, details, _ = js.fit_panel(data, int(season), int(week), args.iterations,
-                                                args.epochs, args.seed, args.jobs or 8, groups)
+                                                args.epochs, args.seed, args.jobs or 8, groups, args.inputs,
+                                                normalize)
             else:
                 target, details, _ = ss.fit_panel(data, int(season), int(week), args.iterations,
-                                                 args.epochs, args.seed, args.jobs, groups, args.inputs)
+                                                 args.epochs, args.seed, args.jobs, groups, args.inputs,
+                                                 normalize=normalize)
             for market in rows:
                 forecast = market_panel(target, market).merge(
                            details[market] if joint else ss.market_details(details, market),
@@ -580,6 +585,11 @@ def two_sided_season(args):
     args.season/args.week, one continuous walk-forward -- args.start_season
     defaults to args.season itself (one season) when not given."""
     import data_crunchski_3 as dc3
+    # 'sided-spread' keeps every input and both rows, and changes only what
+    # each row is asked for: the margin from its own side rather than its own
+    # score. The two estimates are then averaged instead of subtracted, which
+    # cancels their errors rather than compounding them. It predicts no total.
+    objective = 'margin' if getattr(args, 'model', 'two-sided') == 'sided-spread' else 'points'
     model_version = getattr(args, 'model_version', 'legacy')
     if model_version.startswith('model_'):
         import model_spec
@@ -587,12 +597,12 @@ def two_sided_season(args):
         model_name = model_spec.ID
         model_label = model_spec.LABEL
         calculation = 'weighted'
-        output_root = model_spec.RESULTS.name
+        output_root = model_spec.RESULTS.name + ('_sided_spread' if objective == 'margin' else '')
     elif model_version == 'legacy':
         model_name = 'two-sided-team-points-v1'
         model_label = 'Two-sided team scores'
         calculation = 'steep'
-        output_root = 'two_sided'
+        output_root = 'sided_spread' if objective == 'margin' else 'two_sided'
     else:
         raise ValueError(f'Unknown two-sided model version: {model_version}')
     # An explicit --calculation overrides the version's default preset; it
@@ -615,6 +625,7 @@ def two_sided_season(args):
                   inputs='league_snapshot_zscore', usage_scaling='symmetric_post_normalization',
                   weather_source='historical_reanalysis', weather_file=str(weather_file),
                   weather_features=dc3.MODEL_WEATHER, metrics=list(dc3.METRICS), context=list(dc3.BASE_CONTEXT),
+                  architecture=getattr(args, 'model', 'two-sided'), objective=objective,
                   iterations=args.iterations,
                   epochs=args.epochs, seed=args.seed, status='RETROSPECTIVE — NOT PREGAME VALIDATION',
                   qb_decay='existing QB Elo decay unchanged')
@@ -661,7 +672,8 @@ def two_sided_season(args):
         if len(regular) < args.train_window:
             raise ValueError(f'{season} wk{week}: insufficient pregame training history')
         data = pd.concat([history[history.week_id >= regular[-args.train_window]], target]).sort_values(KEY)
-        details, importance = ss.fit_two_sided(data, int(season), int(week), args.iterations, args.epochs, args.seed, args.jobs)
+        details, importance = ss.fit_two_sided(data, int(season), int(week), args.iterations, args.epochs,
+                                               args.seed, args.jobs, objective)
         importances.append(importance.set_index('feature')['importance'])
         result = target.merge(details, on=['away_team', 'home_team'], validate='one_to_one')
         results.append(result)
@@ -678,7 +690,8 @@ def two_sided_season(args):
     mean_importance = pd.concat(importances, axis=1).mean(axis=1).sort_values(ascending=False)
     mean_importance.rename('importance').to_csv(output / 'feature_importance.csv')
     report = dict(config, games=len(all_games), markets={})
-    for market in ['spread', 'total']:
+    # The margin objective produces no total, so there is nothing to score there.
+    for market in (['spread'] if objective == 'margin' else ['spread', 'total']):
         data = market_panel(all_games, market)
         if market == 'total':
             data['prediction'], data['variance'] = data.total_prediction, data.total_variance
@@ -701,7 +714,10 @@ def configure_workers(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--model', choices=['shared', 'joint', 'two-sided'], default='shared')
+    parser.add_argument('--model', choices=['shared', 'joint', 'two-sided', 'sided-spread'], default='shared',
+                        help="Architecture. 'two-sided' scores each team and subtracts; 'sided-spread' asks "
+                             'each side for the margin directly and averages, which halves the spread\'s '
+                             'variance but forecasts no total.')
     import model_spec
     parser.add_argument('--model-version', choices=['legacy'] + [f'model_{v}' for v in model_spec.VERSIONS],
                         default='legacy',
@@ -737,14 +753,19 @@ if __name__ == '__main__':
     parser.add_argument('--weather-source', choices=['forecast', 'recorded'], default='forecast')
     parser.add_argument('--weather-file')
     parser.add_argument('--decision-hours', type=float, default=24)
-    parser.add_argument('--inputs', choices=['differential', 'separate'], default='differential')
+    parser.add_argument('--inputs', choices=['separate', 'differential'], default='differential',
+                        help='How a team\'s offense and the opposing defense combine: kept apart or differenced')
+    parser.add_argument('--normalize', choices=['raw', 'zscore', 'percentile'], default='raw',
+                        help="What scale they are measured on. 'raw' is the per-team rate; 'zscore' and "
+                             "'percentile' rank each team against that week's league first. Independent of "
+                             "--inputs: separate+zscore is what the two-sided production model uses.")
     parser.add_argument('--output')
     args = parser.parse_args()
     try:
         configure_workers(args)
     except ValueError as error:
         parser.error(str(error))
-    if args.model == 'two-sided':
+    if args.model in ['two-sided', 'sided-spread']:
         # Multi-season by request: --start-season's week 1 through --season/
         # --week, one continuous walk-forward. Default (no --start-season)
         # stays a single season, matching the old behavior.
@@ -771,7 +792,7 @@ if __name__ == '__main__':
             print(json.dumps(plan, indent=2, default=str))
         raise SystemExit(0)
     if args.plan:
-        parser.error('--plan is currently supported for --model two-sided only')
+        parser.error('--plan is currently supported for --model two-sided/sided-spread only')
     if args.model_version != 'legacy':
         # A model version is an input set (2.1 adds EPA, 2.2 adds travel), so it
         # applies to any architecture that reads data_crunchski_3's lists -- not
@@ -790,7 +811,7 @@ if __name__ == '__main__':
             # run never lands on top of another one -- and so alpha_juicer can
             # find it next to the two-sided runs.
             args.output = (f'data/bt/{args.model_version}_{args.model}/{args.start_season}-{args.season}/'
-                           f'{args.inputs}_{args.calculation or "weighted"}'
+                           f'{args.inputs}-{args.normalize}_{args.calculation or "weighted"}'
                            f'_lb{args.lookback}_tw{args.train_window}_it{args.iterations}')
         else:
             args.output = 'data/optimize_picks/shared_context' + ('_differential' if args.inputs == 'differential' else '')
@@ -798,8 +819,12 @@ if __name__ == '__main__':
                 args.output = 'data/optimize_picks/joint_context_' + args.weather_source
     if args.model == 'shared' and any(g not in ss.GROUPS for g in args.groups):
         parser.error('Weather and importance groups require --model joint')
-    if args.model == 'joint' and args.inputs != 'differential':
-        parser.error('Joint models require differential inputs')
+    # 'separate' keeps offense and defense apart instead of differencing them,
+    # which preserves the scoring level the difference throws away. Joint's
+    # rows are [away block, home block] and it subtracts the two evaluations,
+    # so the block width is free -- the old restriction was historical.
+    if args.model == 'joint' and args.inputs not in ['differential', 'separate']:
+        parser.error('Joint models take differential or separate inputs')
     if args.decision_hours < 0:
         parser.error('--decision-hours must be nonnegative')
     if not args.start_season < args.validation_season <= args.season:

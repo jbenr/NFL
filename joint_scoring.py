@@ -98,9 +98,20 @@ def context_panel(panel, groups, weather_source='forecast', weather_file=None, d
     return result
 
 
-def prepare(panel, season, week, groups):
+def prepare(panel, season, week, groups, inputs='differential', normalize='raw'):
+    """inputs: 'differential' gives each side one number per metric (own
+    offense minus opposing defense); 'separate' keeps the two apart.
+
+    The difference matters more than it looks. Differencing discards the
+    level: a good offense against a good defense subtracts to the same number
+    as a bad one against a bad defense, and a model that only sees the
+    difference cannot tell those games apart. That is the leading suspect for
+    why the shared model's predictions collapsed to a near-constant (standard
+    deviation 3.1 against a market line's 5.9). Joint's rows carry both
+    sides' differences at once, which helps but does not restore the level --
+    'separate' does."""
     base_groups = [g for g in groups if g in ss.GROUPS]
-    target, x, _, xp, _ = dc.prepare(panel, season, week, base_groups, 'differential')
+    target, x, _, xp, _ = dc.prepare(panel, season, week, base_groups, inputs, normalize=normalize)
     prior = panel[(panel.season < season) | ((panel.season == season) & (panel.week < week))]
     extras, future, names = [], [], []
     if 'importance' in groups:
@@ -121,7 +132,7 @@ def prepare(panel, season, week, groups):
         center, scale = train.mean(), train.std(ddof=0).replace(0, 1)
         x = np.c_[x, (train - center) / scale]
         xp = np.c_[xp, (test - center) / scale]
-    names = dc.feature_names('differential') + target.attrs['context_names'] + names
+    names = dc.feature_names(inputs) + target.attrs['context_names'] + names
     n, m = len(prior), len(target)
     # Each game is one training row. Reversal swaps entire side blocks.
     x, xp = np.c_[x[:n], x[n:]], np.c_[xp[:m], xp[m:]]
@@ -176,13 +187,14 @@ def attribution_name(name, side):
         name, 'context_' + name.split(':')[0])
 
 
-def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=8, groups=()):
+def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=8, groups=(),
+              inputs='differential', normalize='raw'):
     from joblib import Parallel, delayed, parallel_config
     from tqdm import tqdm
     from modelo_workers import initialize_worker
     if iterations < 2 or epochs < 1 or jobs < 1:
         raise ValueError('Require iterations >= 2, epochs >= 1, jobs >= 1')
-    target, x, targets, xp, names = prepare(panel, season, week, groups)
+    target, x, targets, xp, names = prepare(panel, season, week, groups, inputs, normalize)
     details, importances = {}, {}
     for market, y in targets.items():
         offset = 0. if market == 'spread' else float(y.mean())

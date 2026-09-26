@@ -37,7 +37,15 @@ def use_travel(enabled=True):
     place, so every module that imported it sees the same set."""
     BASE_CONTEXT[:] = [c for c in BASE_CONTEXT if c != TRAVEL_CONTEXT] + ([TRAVEL_CONTEXT] if enabled else [])
     return list(BASE_CONTEXT)
-INPUT_MODES = ['separate', 'differential', 'percentile', 'zscore']
+# Two independent choices, not one list. COMBINATION decides whether a
+# team's offense and the opposing defense stay apart or get differenced;
+# NORMALIZATION decides what scale they are on. The old names conflated them
+# ('zscore' meant z-scored AND differenced), which left the cell the
+# production model actually uses -- separate + zscore, see two_sided_rows --
+# unreachable from every other architecture.
+INPUT_MODES = ['separate', 'differential']
+NORMALIZATIONS = ['raw', 'zscore', 'percentile']
+LEGACY_INPUT_MODES = {'percentile': ('differential', 'percentile'), 'zscore': ('differential', 'zscore')}
 HISTORICAL_WEATHER = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches',
                       'snowfall_inches', 'snow_depth_inches']
 # The subset the two-sided model actually takes as inputs. Rain and snowfall
@@ -112,7 +120,18 @@ def two_sided_rows(games):
     return pd.concat(blocks, ignore_index=True)
 
 
-def prepare_two_sided(panel, season, week):
+def prepare_two_sided(panel, season, week, objective='points'):
+    """objective='points' (the two-sided model): each row's label is that
+    team's score, and the spread comes from subtracting the two predictions.
+
+    objective='margin' (sided-spread): each row's label is the margin from
+    that team's own point of view, so both rows are estimating the same
+    quantity with opposite signs and the spread is their AVERAGE. That is the
+    point of it -- subtracting two score estimates adds their errors, while
+    averaging two margin estimates cancels them, which halves the variance of
+    the only number a spread bet cares about. The cost is the scoreline
+    anchor: nothing forces the model to commit to 24-17, and no total can be
+    recovered, so this objective predicts spreads only."""
     prior = (panel.season < season) | ((panel.season == season) & (panel.week < week))
     train = panel.loc[prior].copy()
     target = panel.loc[(panel.season == season) & (panel.week == week)].copy()
@@ -138,12 +157,19 @@ def prepare_two_sided(panel, season, week):
     center, scale = x[features].mean(), x[features].std(ddof=0)
     scale = scale.mask(scale < 1e-6, 1.)
     x[features], xp[features] = (x[features] - center) / scale, (xp[features] - center) / scale
-    y = np.r_[train.away_score, train.home_score].astype('float32')
+    if objective == 'margin':
+        margin = (train.away_score - train.home_score).to_numpy()
+        y = np.r_[margin, -margin].astype('float32')
+    elif objective == 'points':
+        y = np.r_[train.away_score, train.home_score].astype('float32')
+    else:
+        raise ValueError(f"objective must be 'points' or 'margin', got {objective!r}")
     if not np.isfinite(y).all():
         raise ValueError('Training scores must be finite')
     offset = float(y.mean())
     target.attrs['model_features'] = features
     target.attrs['context_names'] = BASE_CONTEXT.copy()
+    target.attrs['objective'] = objective
     return target, x.to_numpy('float32'), y - offset, xp.to_numpy('float32'), offset
 
 
@@ -231,7 +257,33 @@ def scoring_rows(games, inputs='separate', metrics=None):
     return pl.concat(blocks).to_pandas()
 
 
-def matchup_representation(train, target, inputs, metrics):
+def normalized_rows(games, inputs, metrics, suffix):
+    """League-normalized matchup inputs: z-scores ('_z') or percentiles ('').
+
+    comp_stats stores these already differenced and already usage-scaled --
+    away_off_{metric} is this week's away offense measured against the whole
+    league and then set against the home defense. So 'differential' takes one
+    number per metric, and 'separate' keeps the offense-vs-defense and
+    defense-vs-offense matchups as two inputs, which is what two_sided_rows
+    does and what the two-sided model's results rest on."""
+    blocks = []
+    for side, opponent in [('away', 'home'), ('home', 'away')]:
+        values = {}
+        for metric in metrics:
+            away_off = games[f'away_off_{metric}{suffix}'].to_numpy()
+            away_def = games[f'away_def_{metric}{suffix}'].to_numpy()
+            own_off, own_def = (away_off, away_def) if side == 'away' else (-away_def, -away_off)
+            if inputs == 'differential':
+                values[f'diff_{metric}'] = own_off
+            else:
+                values[f'off_{metric}'], values[f'def_{metric}'] = own_off, own_def
+        values['home_field'] = games.home_field_adv.to_numpy() if side == 'home' else np.zeros(len(games))
+        values['rest_advantage'] = games[f'{side}_rest'].to_numpy() - games[f'{opponent}_rest'].to_numpy()
+        blocks.append(pd.DataFrame(values))
+    return pd.concat(blocks, ignore_index=True)
+
+
+def matchup_representation(train, target, inputs, metrics, normalize='raw'):
     """Use stored production percentile/z-score differences, or raw shared
     inputs. percentile and zscore are parallel representations built the
     same way by data_crunchski_2.comp_stats -- normalize each team's stat
@@ -244,27 +296,25 @@ def matchup_representation(train, target, inputs, metrics):
     Negate away-defense differences for the home offense perspective. Retain
     production's rank directions and its asymmetric usage scaling exactly.
     """
-    if inputs in ['percentile', 'zscore']:
-        suffix = '' if inputs == 'percentile' else '_z'
-        results = []
-        for games in [train, target]:
-            blocks = []
-            for side, unit, sign in [('away', 'off', 1.), ('home', 'def', -1.)]:
-                values = {f'diff_{metric}': sign * games[f'away_{unit}_{metric}{suffix}'].to_numpy()
-                          for metric in metrics}
-                opponent = 'home' if side == 'away' else 'away'
-                values['home_field'] = games.home_field_adv.to_numpy() if side == 'home' else np.zeros(len(games))
-                values['rest_advantage'] = games[f'{side}_rest'].to_numpy() - games[f'{opponent}_rest'].to_numpy()
-                blocks.append(pd.DataFrame(values))
-            results.append(pd.concat(blocks, ignore_index=True))
-        return tuple(results)
-    if inputs in ['separate', 'differential']:
+    if inputs in LEGACY_INPUT_MODES:            # 'zscore'/'percentile' as a single word
+        inputs, normalize = LEGACY_INPUT_MODES[inputs]
+    if inputs not in INPUT_MODES:
+        raise ValueError(f'Unknown input mode: {inputs}; have {", ".join(INPUT_MODES)}')
+    if normalize not in NORMALIZATIONS:
+        raise ValueError(f'Unknown normalization: {normalize}; have {", ".join(NORMALIZATIONS)}')
+    if normalize == 'raw':
         return scoring_rows(train, inputs, metrics), scoring_rows(target, inputs, metrics)
-    raise ValueError(f'Unknown input mode: {inputs}')
+    suffix = '_z' if normalize == 'zscore' else ''
+    return (normalized_rows(train, inputs, metrics, suffix),
+            normalized_rows(target, inputs, metrics, suffix))
 
 
-def prepare(games, season, week, groups=(), inputs='separate', metrics=None):
-    """metrics: optional override of METRICS -- see feature_names' docstring."""
+def prepare(games, season, week, groups=(), inputs='separate', metrics=None, normalize='raw'):
+    """metrics: optional override of METRICS -- see feature_names' docstring.
+    normalize: 'raw', 'zscore' or 'percentile' -- the scale the matchup inputs
+    are measured on, independent of whether they are differenced."""
+    if inputs in LEGACY_INPUT_MODES:
+        inputs, normalize = LEGACY_INPUT_MODES[inputs]
     features = feature_names(inputs, metrics)
     if 'referee' in groups and 'referee_total_delta' not in games:
         games = referee_tendencies(games, games)
@@ -276,7 +326,8 @@ def prepare(games, season, week, groups=(), inputs='separate', metrics=None):
     y = np.r_[train.away_score, train.home_score].astype('float32')
     if not np.isfinite(y).all():
         raise ValueError('Shared scoring requires finite completed training scores')
-    x, xp = matchup_representation(train, target, inputs, metrics if metrics is not None else METRICS)
+    x, xp = matchup_representation(train, target, inputs, metrics if metrics is not None else METRICS,
+                                   normalize)
     context_names = [name for name in BASE_CONTEXT if name in x.columns]
     for group in groups:
         if group == 'referee':

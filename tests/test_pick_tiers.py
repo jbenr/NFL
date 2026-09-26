@@ -85,16 +85,16 @@ class TierTests(unittest.TestCase):
             self.assertEqual(wp.NO_PICK[market]['model'], owners.pop())
 
     def test_a_bucket_never_fires_on_another_model(self):
-        """The weeks 1-12 band is 54.9% on the shared model and 47-49% on
-        every two-sided run, so applying it to the wrong one is a leak."""
-        shared_pick = dict(market='spread', week=6, sd=1.5, line=-3., edge=4.)
-        self.assertEqual(wp.pick_tier(**shared_pick, running=wp.SHARED_MODEL), 'B')
-        self.assertIsNone(wp.pick_tier(**shared_pick, running=wp.TIER_MODEL))
-        self.assertIsNone(wp.pick_tier(**shared_pick))          # default is the packet's model
-        # ...and the two-sided buckets stay put.
-        self.assertEqual(wp.pick_tier('spread', 14, importance=.8, sd=4., line=-3., edge=4.), 'S')
-        self.assertIsNone(wp.pick_tier('spread', 14, importance=.8, sd=4., line=-3., edge=4.,
-                                       running=wp.SHARED_MODEL))
+        """Rates are model-specific: the late-season leverage bucket is 60.7%
+        on the model it was measured on, and describes nothing on a different
+        architecture. A model with no buckets of its own gets no picks."""
+        late = dict(market='spread', week=14, importance=.8, sd=4., line=-3., edge=4.)
+        self.assertEqual(wp.pick_tier(**late), 'S')
+        self.assertEqual(wp.pick_tier(**late, running=wp.TIER_MODEL), 'S')
+        self.assertIsNone(wp.pick_tier(**late, running=wp.SHARED_MODEL))
+        for week in [3, 8, 14]:
+            self.assertIsNone(wp.pick_tier('spread', week, importance=.8, sd=1.5, line=-3., edge=4.,
+                                           running=wp.SHARED_MODEL))
 
     def test_the_letter_follows_the_measured_rate(self):
         self.assertEqual(wp.tier_band(.64), 'S')
@@ -145,26 +145,23 @@ class ProfileTests(unittest.TestCase):
             for field in ['version', 'architecture', 'lookback', 'train_window', 'calculation']:
                 self.assertIsNotNone(settings[field], f'{name} is missing {field}')
 
-    def test_the_season_is_split_between_profiles_not_shared(self):
+    def test_a_week_is_only_fit_by_profiles_that_own_something(self):
+        """No profile is run for nothing: the shared architecture owned weeks
+        1-12 spreads until its finished backtest came in at 53.3%, and the
+        packet stopped fitting it the moment its bucket went."""
         import model_spec
-        self.assertEqual(model_spec.owner('spread', 3), model_spec.SHARED_PROFILE)
-        self.assertEqual(model_spec.owner('spread', 12), model_spec.SHARED_PROFILE)
-        self.assertEqual(model_spec.owner('spread', 13), model_spec.DEFAULT_PROFILE)
-        self.assertEqual(model_spec.owner('total', 3), model_spec.DEFAULT_PROFILE)
-        # and the bucket that fires has to belong to the profile that owns the week
-        for week in [3, 13]:
-            owner = model_spec.owner('spread', week)
-            bucket = wp.pick_bucket('spread', week, importance=.8, sd=2., line=-3., edge=4., running=owner)
-            if bucket:
-                self.assertEqual(bucket['model'], owner)
+        for week in [1, 3, 12, 13, 22]:
+            for market in ['spread', 'total']:
+                self.assertEqual(model_spec.owner(market, week), model_spec.DEFAULT_PROFILE)
+            _, order = model_spec.lineup(week)
+            self.assertEqual(order, [model_spec.DEFAULT_PROFILE])
 
-    def test_late_weeks_need_only_one_model(self):
+    def test_every_owning_profile_has_buckets_to_justify_it(self):
         import model_spec
-        _, order = model_spec.lineup(14)
-        self.assertEqual(order, [model_spec.DEFAULT_PROFILE])
-        _, early = model_spec.lineup(3)
-        self.assertEqual(len(early), 2)
-        self.assertEqual(early[0], model_spec.DEFAULT_PROFILE)   # owns the panel the other reuses
+        owners = {model_spec.owner(market, week) for week in range(1, 23) for market in ['spread', 'total']}
+        with_buckets = {bucket['model'] for spec in wp.PICK_BUCKETS.values() for bucket in spec['buckets']}
+        self.assertTrue(owners <= with_buckets,
+                        f'{owners - with_buckets} would be fit every week without a bucket to show for it')
 
 
 class PlumbingTests(unittest.TestCase):

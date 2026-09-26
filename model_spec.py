@@ -92,9 +92,15 @@ def profile(name=None):
 
 def owner(market, week):
     """Which profile owns this market in this week -- the single place that
-    decides which model a pick comes from."""
-    if market == 'spread' and int(week) <= SHARED_SPREAD_WEEKS:
-        return SHARED_PROFILE
+    decides which model a pick comes from.
+
+    Everything is the default profile's today. The shared architecture briefly
+    owned weeks 1-12 spreads, on a band that measured 54.9% at 85% of its
+    backtest and 53.3% on the finished one -- below the floor, and driven by
+    a near-constant predictor rather than a matchup read (see
+    weekly_packet.SHARED_MODEL). The split machinery stays because it is the
+    right shape the moment a second profile earns a bucket: put it back by
+    returning SHARED_PROFILE here for the weeks it owns."""
     return DEFAULT_PROFILE
 
 

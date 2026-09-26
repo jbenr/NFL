@@ -114,7 +114,7 @@ def summarize(target, runs, offset):
 
 
 def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=None, groups=(), inputs='separate',
-             metrics=None, progress_position=0):
+             metrics=None, progress_position=0, normalize='raw'):
     """metrics: optional override of data_crunchski_3.METRICS -- a feature-
     selected subset from optimus_prime's shared-model track. None (default,
     every existing caller) uses the full production metric list, unchanged.
@@ -143,7 +143,7 @@ def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=N
         panel = panel.drop(columns=columns, errors='ignore').merge(sched[op.KEY + columns], on=op.KEY, validate='one_to_one')
         if 'referee' in groups:
             panel = referee_tendencies(panel, sched)
-    target, x, y, xp, offset = prepare(panel, season, week, groups, inputs, metrics)
+    target, x, y, xp, offset = prepare(panel, season, week, groups, inputs, metrics, normalize)
     fingerprint = [a.tobytes().hex() for a in [x, y, xp]]
     identity = [fingerprint, target[op.KEY].to_dict('list'), offset, iterations, epochs, seed, list(groups),
                 target.attrs['context_names'], inputs, target.attrs['model_features']]
@@ -176,7 +176,8 @@ def fit_panel(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=N
     return target, details, importance
 
 
-def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=8):
+def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jobs=8,
+                  objective='points'):
     """Same team-score network, now with both matchups and weather as inputs.
 
     Returns (details, importance), schema-compatible with summarize()'s
@@ -211,10 +212,10 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
     from tqdm import tqdm
     if iterations < 2 or jobs < 1 or epochs < 1:
         raise ValueError('Require iterations >= 2, jobs >= 1 and epochs >= 1')
-    target, x, y, xp, offset = prepare_two_sided(panel, season, week)
+    target, x, y, xp, offset = prepare_two_sided(panel, season, week, objective)
     names = target.attrs['model_features'] + BASE_CONTEXT
     digest = hashlib.sha256(b''.join(a.tobytes() for a in [x, y, xp])).hexdigest()
-    identity = [digest, names, offset, season, week, iterations, epochs, seed,
+    identity = [digest, names, offset, season, week, iterations, epochs, seed, objective,
                target[['away_team', 'home_team']].to_dict('list')]
     # Keyed on the code that actually fits (these functions + the data prep,
     # network and worker modules), not all of shared_scoring.py -- so editing
@@ -241,13 +242,35 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
     scores = np.stack([r[0] for r in runs]) + offset
     away, home = scores[:, :count], scores[:, count:]
     result = target[['away_team', 'home_team']].reset_index(drop=True).copy()
-    result['away_points'], result['home_points'] = away.mean(0), home.mean(0)
-    result['prediction'], result['variance'] = (away - home).mean(0), (away - home).var(0, ddof=1)
-    result['total_prediction'], result['total_variance'] = (away + home).mean(0), (away + home).var(0, ddof=1)
+    # With the margin objective both rows estimate the same spread from
+    # opposite sides, so away - home double-counts it: halving turns the
+    # subtraction into an average, which is where the variance reduction
+    # comes from. Nothing sums to a total, and neither row is a score.
+    margin_target = target.attrs.get('objective', 'points') == 'margin'
+    share = .5 if margin_target else 1.
+    nowhere = np.full(count, np.nan)
+    result['away_points'] = nowhere if margin_target else away.mean(0)
+    result['home_points'] = nowhere if margin_target else home.mean(0)
+    if margin_target:
+        # Keep what each side said on its own. Both are put in away-minus-home
+        # terms so they estimate the same number and average to the
+        # prediction; the home row is negated because its label was the margin
+        # from the home team's point of view. side_gap is how far apart the two
+        # views landed, which is a disagreement signal the averaged number
+        # hides -- a game both sides read the same way is not the same bet as
+        # one where they differ by ten points.
+        result['spread_from_away'] = away.mean(0)
+        result['spread_from_home'] = -home.mean(0)
+        result['side_gap'] = result.spread_from_away - result.spread_from_home
+    result['prediction'] = share * (away - home).mean(0)
+    result['variance'] = share ** 2 * (away - home).var(0, ddof=1)
+    result['total_prediction'] = nowhere if margin_target else (away + home).mean(0)
+    result['total_variance'] = nowhere if margin_target else (away + home).var(0, ddof=1)
     attrs = np.mean([r[1] for r in runs], axis=0)
     bases = np.mean([r[2] for r in runs], axis=0) + offset
     away_base, home_base = bases[:count], bases[count:]
-    result['baseline'], result['total_baseline'] = away_base - home_base, away_base + home_base
+    result['baseline'] = share * (away_base - home_base)
+    result['total_baseline'] = nowhere if margin_target else away_base + home_base
 
     # IG completeness guarantees sum(attributions) == f(input) - f(baseline)
     # for the away row and, separately, for the home row -- so margin's
@@ -267,10 +290,11 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
         return CONTEXT_LABELS.get(name, f'context_{name}')
     for j, name in enumerate(names_all):
         feature = label(name)
-        result[f'attr_{feature}'] = attrs[:count, j] - attrs[count:, j]
-        result[f'total_attr_{feature}'] = attrs[:count, j] + attrs[count:, j]
+        result[f'attr_{feature}'] = share * (attrs[:count, j] - attrs[count:, j])
+        result[f'total_attr_{feature}'] = nowhere if margin_target else attrs[:count, j] + attrs[count:, j]
     result['integration_residual'] = result.prediction - result.baseline - result.filter(regex='^attr_').sum(axis=1)
-    result['total_integration_residual'] = (result.total_prediction - result.total_baseline
+    result['total_integration_residual'] = (nowhere if margin_target else
+                                            result.total_prediction - result.total_baseline
                                             - result.filter(regex='^total_attr_').sum(axis=1))
     imps = np.stack([r[3] for r in runs])
     importance = pd.DataFrame({'feature': names, 'importance': imps.mean(0),

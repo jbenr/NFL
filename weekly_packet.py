@@ -1238,7 +1238,18 @@ HIGH_CONFIDENCE_CUTOFFS = {
 # disagree with is a bucket to size down. Where they spread wide, the shipped
 # rate is probably the optimistic end.
 TIER_MODEL = 'Model 2.0 · weighted'   # the model the packet builds today
-SHARED_MODEL = 'Model 2.1 · shared'   # a different architecture: see the weeks 1-12 spread bucket
+# A different architecture, kept defined because the packet can still run it
+# (model_spec.PROFILES) -- but it has no buckets. Its weeks 1-12 spread band
+# read 57.9% on its first three seasons, 54.9% at 85% of the backtest and
+# 53.3% on the finished one: below the floor, CI [50.0, 56.7]. The mechanism
+# was never a matchup read. Its predictions have a standard deviation of 3.1
+# against an actual margin spread of 14.5, correlate 0.16 with results where
+# the two-sided model manages 0.31, and favour the home team 67% of the time,
+# so a market line away from its near-constant output became an "edge" and
+# the band picked the underdog 90% of the time. Backing the dog blind on the
+# same games returns 51.9%, so the model added about a point and a half --
+# real, but not enough to bet.
+SHARED_MODEL = 'Model 2.1 · shared'
 # A bucket is measured on ONE model and only fires on that model. This is not
 # bookkeeping: the weeks 1-12 spread band below is 54.9% on the shared model
 # and 47-49% on all five two-sided runs, so applying it to the wrong one turns
@@ -1265,28 +1276,6 @@ PICK_BUCKETS = {
                   '(46.6%), which fits: in September nothing is decided, so the number measures nothing. '
                   'This replaced an SD-based rule that scored the same here but fell to 52.4% and 49.4% on '
                   'two of the siblings; this one holds at 59-60% on all four, worst era 58%.'),
-    ]),
-    'spread_shared': dict(edge=3.0, buckets=[
-        # Weeks 1-12 spreads, which the two-sided model has never been able to
-        # read at all (49% across 1,320 filter combinations on five runs). The
-        # shared architecture inverts: it is mildly right early and actively
-        # wrong late (43.0% in weeks 13-14), so this bucket stops at week 12.
-        #
-        # The band, not a threshold: this model is right when it nudges and
-        # wrong when it screams. Disagreements of 8+ points are its worst
-        # bucket (50.6%); 3-6 is its best. That shape holds in all four eras.
-        dict(rule='weeks 1-12, the model 3 to 6 points off the spread',
-             test=lambda week, importance, sd, line, edge: (week <= 12 and edge is not None
-                                                            and 3. <= abs(edge) < 6.),
-             model=SHARED_MODEL, rate=.549, n=736, worth='+2.5u a season on ~52 picks, up 8 of 14 years',
-             eras='56 / 52 / 56 / 56%',
-             siblings='none yet -- no second shared run exists, so this is the one rule here with no '
-                      'cross-model check',
-             note='95% CI [51.2, 58.4], so break-even sits inside it: p=0.10 against 52.4%, p=0.005 against a '
-                  'coin, bootstrap P(better than break-even)=0.91. Walk-forward, betting a season only once '
-                  'prior seasons already showed 54%, it qualified from 2013 on and returned 53.9% of 566. '
-                  'Measured on 2010-2023wk14 while the backtest was still running -- recheck when it '
-                  'finishes, and do not size it like the late-season S buckets.'),
     ]),
     'total': dict(edge=5.0, buckets=[
         # Ordered, and each rate is measured on what the buckets above it
@@ -1345,15 +1334,6 @@ NO_PICK = {
                         'about 1,800 rules, re-scored on all four backtests -- clears 54 rules here against '
                         'the 59 that the same gate clears on coin-flip outcomes. The spread search finds no '
                         'more than chance does, so everything outside the bucket above stays unbet.'),
-    'spread_shared': dict(model=SHARED_MODEL,
-                          rule='everything else: a disagreement of 6 points or more, and all of week 13 on',
-                          record='50.5% of 1490 would-be picks, -3.5% per bet',
-                          worth='-3.7u a season on ~106 picks', eras='50 / 49 / 51 / 55%',
-                          note='The two halves fail for opposite reasons. Big disagreements in weeks 1-12 '
-                               '(51.2% of 699) are where this model overreaches -- the further it strays from '
-                               'the market the worse it does, which is the reverse of the two-sided model. '
-                               'Week 13 on (49.9% of 791) is simply its blind spot, and 43.0% in weeks 13-14 '
-                               'is the worst window either architecture has.'),
     'total': dict(model=TIER_MODEL, rule='everything else: weeks 1-4 without a big differential, the 42-46 '
                                          'band, and any week the buckets above do not claim',
                   record='46.3% of 395 would-be picks, -11.5% per bet', worth='-2.9u a season on ~25 picks',
@@ -1380,11 +1360,13 @@ def tier_band(rate):
 
 
 def market_key(market, running=None):
-    """Which bucket list serves this market for the model in hand. The spread
-    has two, one per architecture; whichever model built the packet picks."""
-    if market == 'spread' and (running or TIER_MODEL) == SHARED_MODEL:
-        return 'spread_shared'
-    return market
+    """Which bucket list serves this market for the model in hand. A profile
+    with buckets of its own gets its own list ('{market}_shared'); when it has
+    none -- the case today -- this is the identity, and pick_bucket's model
+    filter then finds nothing, which is the right answer for a model with no
+    measured edge."""
+    own = {SHARED_MODEL: f'{market}_shared'}.get(running or TIER_MODEL)
+    return own if own in PICK_BUCKETS else market
 
 
 def pick_bucket(market, week, importance=None, sd=None, line=None, edge=None, running=None):
