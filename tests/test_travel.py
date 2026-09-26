@@ -143,6 +143,21 @@ class VersionTests(unittest.TestCase):
         self.assertNotIn(dc.TRAVEL_CONTEXT, dc.BASE_CONTEXT)
         self.assertIn('pass_epa_pp', dc.METRICS)
 
+    def test_2_3_is_the_union_of_its_two_parents(self):
+        """2.1 and 2.2 are siblings off 2.0; 2.3 is both at once, so it has
+        to end up with 2.1's metrics and 2.2's context and nothing new."""
+        import model_spec
+        model_spec.select('2.1')
+        epa_metrics = list(dc.METRICS)
+        model_spec.select('2.2')
+        travel_context = list(dc.BASE_CONTEXT)
+        model_spec.select('2.3')
+        self.assertEqual(dc.METRICS, epa_metrics)
+        self.assertEqual(dc.BASE_CONTEXT, travel_context)
+        self.assertIn(dc.TRAVEL_CONTEXT, dc.BASE_CONTEXT)
+        self.assertIn('pass_epa_pp', dc.METRICS)
+        self.assertEqual(model_spec.RESULTS.name, 'model_2.3')
+
 
 if __name__ == '__main__':
     unittest.main()

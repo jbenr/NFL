@@ -56,6 +56,17 @@ VERSIONS = {
         'the three stay on comparable scales.',
         'Built on Model 2.0, not 2.1: EPA is off here so the travel input can be measured on its own against the '
         '2.0 backtest. Turn both on by setting epa=True for this version in VERSIONS.']),
+    '2.3': dict(epa=True, travel=True, changes=[
+        "The union of 2.1 and 2.2: EPA's four split metrics in the network, and travel distance in the context "
+        'layer. 44 inputs against 2.0\'s 35.',
+        'Neither half helped on its own, and that is the reason to run it rather than an argument against it. '
+        'EPA (2.1) measured slightly worse than 2.0 on spreads -- MAE 11.015 against 10.889 -- and travel (2.2) '
+        'was a wash, agreeing with 2.0 on 95.3% of picks even though it learned the right sign (-0.84 points '
+        'per 1,000 miles against the traveller). Two inputs that are individually flat can still interact: a '
+        'team\'s EPA is measured over games it mostly played rested and near home, so travel is exactly the '
+        'kind of thing that should modify how much to trust it.',
+        'If this reads like the other two -- no better than 2.0 -- that is the answer, and the input set is '
+        'settled at 2.0 for good.']),
 }
 # A profile is the whole recipe a set of backtested hit rates belongs to:
 # architecture, input set, stat lookback, training window and recency preset.
