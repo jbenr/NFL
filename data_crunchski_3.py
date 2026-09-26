@@ -200,11 +200,16 @@ def scoring_rows(games, inputs='separate', metrics=None):
                     values[f'off_{metric}'], values[f'def_{metric}'] = offense, defense
             values['home_field'] = games.home_field_adv.to_numpy() if side == 'home' else np.zeros(len(games))
             values['rest_advantage'] = games[f'{side}_rest'].to_numpy() - games[f'{opponent}_rest'].to_numpy()
+            if TRAVEL_CONTEXT in BASE_CONTEXT and f'{side}_travel_miles' in games:
+                values[TRAVEL_CONTEXT] = (games[f'{side}_travel_miles'].to_numpy()
+                                          - games[f'{opponent}_travel_miles'].to_numpy()) / TRAVEL_SCALE
             blocks.append(pd.DataFrame(values))
         return pd.concat(blocks, ignore_index=True)
     columns = [f'{side}_raw_{unit}_{metric}' for side in ['away', 'home']
                for unit in ['off', 'def'] for metric in metrics]
-    frame = games.select(columns + ['home_field_adv', 'away_rest', 'home_rest'])
+    travel_columns = (['away_travel_miles', 'home_travel_miles']
+                      if TRAVEL_CONTEXT in BASE_CONTEXT and 'away_travel_miles' in games.columns else [])
+    frame = games.select(columns + ['home_field_adv', 'away_rest', 'home_rest'] + travel_columns)
     blocks = []
     for side, opponent in [('away', 'home'), ('home', 'away')]:
         expressions = []
@@ -219,6 +224,9 @@ def scoring_rows(games, inputs='separate', metrics=None):
             (pl.col('home_field_adv').cast(pl.Float64) if side == 'home' else pl.lit(0.)).alias('home_field'),
             (pl.col(f'{side}_rest') - pl.col(f'{opponent}_rest')).alias('rest_advantage'),
         ])
+        if travel_columns:
+            expressions.append(((pl.col(f'{side}_travel_miles') - pl.col(f'{opponent}_travel_miles'))
+                                / TRAVEL_SCALE).alias(TRAVEL_CONTEXT))
         blocks.append(frame.select(expressions))
     return pl.concat(blocks).to_pandas()
 

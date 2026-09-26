@@ -47,6 +47,55 @@ VERSIONS = {
         'Built on Model 2.0, not 2.1: EPA is off here so the travel input can be measured on its own against the '
         '2.0 backtest. Turn both on by setting epa=True for this version in VERSIONS.']),
 }
+# A profile is the whole recipe a set of backtested hit rates belongs to:
+# architecture, input set, stat lookback, training window and recency preset.
+# The keys are the names the packet's tier table uses, which is the join
+# between "what ran" and "which buckets apply" -- weekly_packet.TIER_MODEL and
+# SHARED_MODEL are these strings.
+#
+# These are not defaults to be overridden casually. A bucket's 60.7% was
+# measured with exactly these numbers; run the same model at a different
+# lookback and the rate on the sheet no longer describes what you are betting.
+# The steep run, for one, was backtested at lookback 10, not 20.
+PROFILES = {
+    'Model 2.0 · weighted': dict(version='2.0', architecture='two-sided', inputs=None,
+                                 lookback=20, train_window=100, calculation='weighted'),
+    'Model 2.1 · shared': dict(version='2.1', architecture='shared', inputs='differential',
+                               lookback=20, train_window=100, calculation='weighted'),
+}
+DEFAULT_PROFILE = 'Model 2.0 · weighted'
+SHARED_PROFILE = 'Model 2.1 · shared'
+# Where each profile's measured edge is. The shared architecture is 54.9% on
+# weeks 1-12 spreads and 49.6% from week 13 (43.0% in weeks 13-14, which is
+# the two-sided model's best window), so they split the season rather than
+# compete for it.
+SHARED_SPREAD_WEEKS = 12
+
+
+def profile(name=None):
+    """One profile's recipe, by the name the tier table uses."""
+    name = name or DEFAULT_PROFILE
+    if name not in PROFILES:
+        raise ValueError(f'Unknown model profile {name!r}; have {", ".join(PROFILES)}')
+    return dict(PROFILES[name], name=name)
+
+
+def owner(market, week):
+    """Which profile owns this market in this week -- the single place that
+    decides which model a pick comes from."""
+    if market == 'spread' and int(week) <= SHARED_SPREAD_WEEKS:
+        return SHARED_PROFILE
+    return DEFAULT_PROFILE
+
+
+def lineup(week):
+    """{market: profile name} for one week, in the order they should be fit
+    (the default profile first, since it owns the panel everything reuses)."""
+    picks = {market: owner(market, week) for market in ['spread', 'total']}
+    order = sorted({*picks.values()}, key=lambda name: name != DEFAULT_PROFILE)
+    return picks, order
+
+
 VERSION = '2.0'
 LABEL = f'{NAME} {VERSION}'
 ID = f'model-{VERSION}'

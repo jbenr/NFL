@@ -414,16 +414,46 @@ def history_weeks(args):
 
 
 def compare(args):
+    """Shared/joint context comparison.
+
+    A legacy run (--model-version legacy) keeps the exact settings it always
+    had -- 20-week stat lookback, 'mean' stats, a 20-week training window --
+    so old results stay reproducible. Give it a model version and it reads
+    those three from the command line instead, the way the two-sided path
+    does, because a version is a set of inputs and comparing input sets is
+    only meaningful when everything else matches."""
+    import data_crunchski_3 as dc3
+    version = getattr(args, 'model_version', 'legacy')
+    versioned = version != 'legacy'
+    lookback = args.lookback if versioned else 20
+    calculation = (args.calculation or 'weighted') if versioned else 'mean'
+    train_window = args.train_window if versioned else 20
     root = Path(args.output)
     root.mkdir(parents=True, exist_ok=True)
-    panel = build_panel(args.season, args.week, history_weeks(args), 20, 'mean')
+    span = history_weeks(args) + (max(train_window - 20, 0) if versioned else 0)
+    panel = build_panel(args.season, args.week, span, lookback, calculation)
+    if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:      # Model 2.2's input
+        import travel
+        panel = travel.attach_travel(panel)
+    if versioned:
+        print(f'{version} / {args.model}: {args.inputs} inputs, {calculation} stats, lookback {lookback}, '
+              f'training window {train_window} REG weeks\n'
+              f'  {len(dc3.METRICS)} metrics ({", ".join(dc3.METRICS[-4:])}...), '
+              f'context {", ".join(dc3.BASE_CONTEXT)}\n  Output: {root}', flush=True)
+        (root / 'config.json').write_text(json.dumps(dict(
+            model=args.model, model_version=version, inputs=args.inputs, lookback=lookback,
+            calculation=calculation, train_window=train_window, start_season=args.start_season,
+            season=args.season, week=args.week, iterations=args.iterations, seed=args.seed,
+            groups=list(args.groups), metrics=list(dc3.METRICS), context=list(dc3.BASE_CONTEXT),
+            status='RETROSPECTIVE — NOT PREGAME VALIDATION'), indent=2), encoding='utf-8')
     evaluation = panel[(panel.season >= args.start_season) & panel.margin.notna()]
     if evaluation.empty:
         raise ValueError('No completed games in the requested evaluation period')
     first = evaluation.week_id.min()
     training = panel[(panel.week_id < first) & panel.game_type.eq('REG')]
-    if training.week_id.nunique() < 20:
-        raise ValueError('Loaded panel lacks 20 regular training weeks; stopped before context calculations')
+    if training.week_id.nunique() < train_window:
+        raise ValueError(f'Loaded panel lacks {train_window} regular training weeks; stopped before '
+                         'context calculations')
     joint = getattr(args, 'model', 'shared') == 'joint'
     if joint:
         import joint_scoring as js
@@ -443,16 +473,16 @@ def compare(args):
         for index, ((season, week), test) in enumerate(weeks.groupby(['season', 'week'])):
             history = panel[panel.week_id < test.week_id.iloc[0]]
             regular = sorted(history.loc[history.game_type.eq('REG'), 'week_id'].unique())
-            if len(regular) < 20:
+            if len(regular) < train_window:
                 raise ValueError(f'Missing training history before {season} week {week}')
-            data = pd.concat([history[history.week_id >= regular[-20]], test]).sort_values(KEY)
+            data = pd.concat([history[history.week_id >= regular[-train_window]], test]).sort_values(KEY)
             print(f'{name}: {season} wk{week}', flush=True)
             if joint:
                 target, details, _ = js.fit_panel(data, int(season), int(week), args.iterations,
-                                                100, args.seed, args.jobs or 8, groups)
+                                                args.epochs, args.seed, args.jobs or 8, groups)
             else:
                 target, details, _ = ss.fit_panel(data, int(season), int(week), args.iterations,
-                                                 100, args.seed, args.jobs, groups, args.inputs)
+                                                 args.epochs, args.seed, args.jobs, groups, args.inputs)
             for market in rows:
                 forecast = market_panel(target, market).merge(
                            details[market] if joint else ss.market_details(details, market),
@@ -675,8 +705,10 @@ if __name__ == '__main__':
     import model_spec
     parser.add_argument('--model-version', choices=['legacy'] + [f'model_{v}' for v in model_spec.VERSIONS],
                         default='legacy',
-                        help='Two-sided: legacy steep experiment, or a Model 2.x version with its own input set '
-                             '(2.1 adds EPA, 2.2 adds travel distance) and weighted production settings')
+                        help='Which input set to run: legacy (each architecture\'s original settings) or a '
+                             'Model 2.x version -- 2.1 adds EPA, 2.2 adds travel distance. Works with every '
+                             '--model; a versioned shared/joint run also honours --lookback, --calculation '
+                             'and --train-window instead of their old hardcoded values.')
     parser.add_argument('--calculation', choices=list(dc.DECAY_PRESETS), default=None,
                         help="Stat recency preset. Default: whatever the model version uses ('weighted' for "
                              "model_2.0, 'steep' for legacy). 'carryover' is 'weighted' with games from an "
@@ -741,13 +773,29 @@ if __name__ == '__main__':
     if args.plan:
         parser.error('--plan is currently supported for --model two-sided only')
     if args.model_version != 'legacy':
-        parser.error('--model-version is currently supported for --model two-sided only')
+        # A model version is an input set (2.1 adds EPA, 2.2 adds travel), so it
+        # applies to any architecture that reads data_crunchski_3's lists -- not
+        # just the two-sided one. select() swaps those lists in place.
+        import model_spec
+        model_spec.select(args.model_version)
+        if args.model != 'two-sided' and args.groups == list(ss.GROUPS):
+            print('--model-version given: fitting the version\'s own input set only. Pass --groups '
+                  'explicitly to add stadium/field/referee context on top.', flush=True)
+            args.groups = []
     if args.start_season is None:
         args.start_season = 2024
     if args.output is None:
-        args.output = 'data/optimize_picks/shared_context' + ('_differential' if args.inputs == 'differential' else '')
-        if args.model == 'joint':
-            args.output = 'data/optimize_picks/joint_context_' + args.weather_source
+        if args.model_version != 'legacy':
+            # Its own folder per version/architecture/settings, so a versioned
+            # run never lands on top of another one -- and so alpha_juicer can
+            # find it next to the two-sided runs.
+            args.output = (f'data/bt/{args.model_version}_{args.model}/{args.start_season}-{args.season}/'
+                           f'{args.inputs}_{args.calculation or "weighted"}'
+                           f'_lb{args.lookback}_tw{args.train_window}_it{args.iterations}')
+        else:
+            args.output = 'data/optimize_picks/shared_context' + ('_differential' if args.inputs == 'differential' else '')
+            if args.model == 'joint':
+                args.output = 'data/optimize_picks/joint_context_' + args.weather_source
     if args.model == 'shared' and any(g not in ss.GROUPS for g in args.groups):
         parser.error('Weather and importance groups require --model joint')
     if args.model == 'joint' and args.inputs != 'differential':

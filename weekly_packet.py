@@ -224,6 +224,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .stats-table tbody tr:hover td{background:#1d2126}
 .packet .headline-table th{padding:7px 8px}
 /* Confidence key, bottom right under the sheet (tier_legend). */
+.model-credit{margin:10px 0 0;font:12px Arial,sans-serif;color:#b7c0c9;text-align:right}
 .tier-legend{display:flex;flex-direction:column;align-items:flex-end;gap:3px;margin:10px 0 0;font:11px Arial,sans-serif;color:#b7c0c9;text-align:right}
 .tier-legend strong{font:12px Graduate,Georgia,serif;color:#e3e6e9}
 .tier-key{display:flex;align-items:center;gap:6px}
@@ -246,8 +247,9 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .tier-chip{display:inline-block;width:20px;text-align:center;border-radius:3px;color:#222;font-weight:700}
 .tier-chip-none{border:1px dashed #6b7480;color:#9aa4ae;font-weight:400}
 .tier-guide .tier-note{color:#8e99a5;margin:12px 0 0}
-@media(max-width:650px){.tier-table th:nth-child(4),.tier-table td:nth-child(4),
-.tier-table th:nth-child(5),.tier-table td:nth-child(5){display:none}.tier-guide summary{text-align:left}}
+@media(max-width:650px){.tier-table th:nth-child(6),.tier-table td:nth-child(6),
+.tier-table th:nth-child(7),.tier-table td:nth-child(7){display:none}.tier-guide summary{text-align:left}}
+.tier-warn{color:#ffd48a}
 .packet .headline-table td{padding:3px 8px}
 /* Every stats table formatted the same tight way (this used to be QB
    Elo-only, leaving the others visibly looser/wider) -- small logos,
@@ -979,7 +981,8 @@ def game_header(row, market, action):
         pick = '–'
     else:
         tier = row.get('tier') or pick_tier(market, row.week, row.get('total_game_importance'),
-                                           float(np.sqrt(row.variance)), row.get('market_base'))
+                                           float(np.sqrt(row.variance)), row.get('market_base'),
+                                           abs(float(row.edge)))
         pick = f'<span class="pill pick tier-{tier}" title="{escape(tier)} confidence">{escape(action)}</span>'
     scores = ''
     if pd.notna(row.get('away_points')) and pd.notna(row.get('home_points')):
@@ -1121,7 +1124,7 @@ def bundle_single_file(folder):
 #          model's disagreement with the spread market carries almost no
 #          information (b = +0.07, t = 1.1).
 HIGH_CONFIDENCE_CUTOFFS = {
-    'spread': dict(diff_cutoff=3.0, sd_cutoff=None),
+    'spread': dict(diff_cutoff=2.0, sd_cutoff=None),
     'total': dict(diff_cutoff=5.0, sd_cutoff=None),
 }
 
@@ -1136,6 +1139,13 @@ HIGH_CONFIDENCE_CUTOFFS = {
 # a dash and the game is not graded (see NO_PICK). Break-even at -110 is 52.4%,
 # so B's floor sits a point and a half above water, not at it.
 #
+# The letter is per-pick quality -- what to trust when deciding one game. What
+# a bucket is WORTH is a different number, and it is the one that pays: hit
+# rate times how many picks the bucket throws a season. 'worth' carries it, at
+# one unit a bet and -110 where the real price is missing. Every bucket here
+# runs 7-14 picks a season, so per-pick quality still drives the ranking; a
+# thinner bucket at a higher rate would not, which is why both are shown.
+#
 # What separates the buckets is the situation, not the model's own confidence:
 # how late in the season it is (in September the 20-week lookback is mostly
 # last season), whether the ensemble agrees with itself (spread), and where the
@@ -1148,71 +1158,130 @@ HIGH_CONFIDENCE_CUTOFFS = {
 # they do not set the letter; they are there because a bucket its siblings
 # disagree with is a bucket to size down. Where they spread wide, the shipped
 # rate is probably the optimistic end.
-TIER_SOURCE = 'Model 2.0 (weighted, 20-week lookback) backtest, 2010-2025: 4363 games'
+TIER_MODEL = 'Model 2.0 · weighted'   # the model the packet builds today
+SHARED_MODEL = 'Model 2.1 · shared'   # a different architecture: see the weeks 1-12 spread bucket
+# A bucket is measured on ONE model and only fires on that model. This is not
+# bookkeeping: the weeks 1-12 spread band below is 54.9% on the shared model
+# and 47-49% on all five two-sided runs, so applying it to the wrong one turns
+# an edge into a leak. pick_bucket() filters on this field.
+# Playoff leverage (playoff_importance.game_importance, 0-1): the top quartile
+# of week 13+ games, which is where the spread edge switches on.
+LEVERAGE = 0.70
+TIER_SOURCE = f'{TIER_MODEL}, 20-week lookback, 2010-2025 backtest: 4363 games'
 TIER_BANDS = [('S', .600), ('A', .575), ('B', .540)]
 DEAD_TOTAL = (42.0, 46.0)
 PICK_BUCKETS = {
-    'spread': dict(edge=3.0, buckets=[
-        dict(rule='week 13-14 or the playoffs, ensemble SD at most 4.5',
-             test=lambda week, importance, sd, line: (13 <= week <= 14 or week >= 19) and (sd is None or sd <= 4.5),
-             rate=.600, n=230, volume='about 14 a season', eras='60 / 62 / 49 / 67%',
-             siblings='carryover 56.9%, steep 52.4%, 2.1-importance 49.4% (n=85)',
-             note='The SD condition earns its place: the same weeks without it are 58.0%, and the high-SD '
-                  'games it drops are 53.9% -- right under the floor. Holds in both halves of this run\'s '
-                  'record, but the siblings run 3-10 points lower, so treat 60% as the top of the range '
-                  'rather than the expectation.'),
-        dict(rule='weeks 15-18, ensemble SD at most 3.75',
-             test=lambda week, importance, sd, line: 15 <= week <= 18 and (sd is None or sd <= 3.75),
-             rate=.549, n=133, volume='about 8 a season', eras='– / 57 / 60 / 53%',
-             siblings='carryover 55.9%, steep 56.0%, 2.1-importance 65.5% (n=29)',
-             note='Late-season picks need a tighter ensemble than weeks 13-14 do: at SD above 3.75 these same '
-                  'weeks are 44.9%, the worst bucket in the model. The steadiest bucket across the siblings '
-                  '(54.9 / 55.9 / 56.0%) and across both halves of the record (54 / 55%) -- modest, but the '
-                  'one whose rate moves least when the model changes.'),
+    'spread': dict(edge=2.0, buckets=[
+        dict(rule=f'week 13 on, including the playoffs, in a game that still matters '
+                  f'(playoff leverage at least {LEVERAGE:.2f})',
+             test=lambda week, importance, sd, line, edge: (week >= 13 and importance is not None
+                                                            and pd.notna(importance) and importance >= LEVERAGE),
+             model=TIER_MODEL, rate=.607, n=252, worth='+2.5u a season on ~16 picks, up 12 of 16 years',
+             eras='59 / 58 / 59 / 65%',
+             siblings='carryover 60.1%, steep 59.1%, 2.1-importance 60.2%',
+             note='Playoff leverage, not the ensemble\'s own confidence, is what separates a December spread '
+                  'the model can read from one it cannot. From week 13 on, the top leverage quarter hits '
+                  '60.7% while the other three sit at 49-52% -- a step, not a slope. The same split in weeks '
+                  '1-12 is worthless, and the high-leverage quarter is actually the worst of them there '
+                  '(46.6%), which fits: in September nothing is decided, so the number measures nothing. '
+                  'This replaced an SD-based rule that scored the same here but fell to 52.4% and 49.4% on '
+                  'two of the siblings; this one holds at 59-60% on all four, worst era 58%.'),
+    ]),
+    'spread_shared': dict(edge=3.0, buckets=[
+        # Weeks 1-12 spreads, which the two-sided model has never been able to
+        # read at all (49% across 1,320 filter combinations on five runs). The
+        # shared architecture inverts: it is mildly right early and actively
+        # wrong late (43.0% in weeks 13-14), so this bucket stops at week 12.
+        #
+        # The band, not a threshold: this model is right when it nudges and
+        # wrong when it screams. Disagreements of 8+ points are its worst
+        # bucket (50.6%); 3-6 is its best. That shape holds in all four eras.
+        dict(rule='weeks 1-12, the model 3 to 6 points off the spread',
+             test=lambda week, importance, sd, line, edge: (week <= 12 and edge is not None
+                                                            and 3. <= abs(edge) < 6.),
+             model=SHARED_MODEL, rate=.549, n=736, worth='+2.5u a season on ~52 picks, up 8 of 14 years',
+             eras='56 / 52 / 56 / 56%',
+             siblings='none yet -- no second shared run exists, so this is the one rule here with no '
+                      'cross-model check',
+             note='95% CI [51.2, 58.4], so break-even sits inside it: p=0.10 against 52.4%, p=0.005 against a '
+                  'coin, bootstrap P(better than break-even)=0.91. Walk-forward, betting a season only once '
+                  'prior seasons already showed 54%, it qualified from 2013 on and returned 53.9% of 566. '
+                  'Measured on 2010-2023wk14 while the backtest was still running -- recheck when it '
+                  'finishes, and do not size it like the late-season S buckets.'),
     ]),
     'total': dict(edge=5.0, buckets=[
-        dict(rule='week 13-14 or the playoffs, posted total outside 42-46',
-             test=lambda week, importance, sd, line: (13 <= week <= 14 or week >= 19) and not dead_total(line),
-             rate=.646, n=113, volume='about 7 a season', eras='54 / 62 / 72 / 66%',
-             siblings='carryover 63.7%, steep 64.6%, 2.1-importance 55.7%',
-             note='The strongest bucket in the system, and above break-even in all four eras.'),
+        # Ordered, and each rate is measured on what the buckets above it
+        # leave behind -- a rule that looks strong standalone can be living
+        # off games an earlier bucket already takes. Weeks 1-4 with a 7-point
+        # differential reads 56.9% on its own and 53.2% on the residual, which
+        # is why September has no bucket of its own despite looking like it
+        # deserved one. Found with alpha_juicer.py (10,500 combinations of
+        # differential, SD, leverage and week bands, scored on all five
+        # completed backtests at once).
+        dict(rule='week 9 on, posted total outside 42-46, ensemble SD at most 4.0',
+             test=lambda week, importance, sd, line, edge: (week >= 9 and not dead_total(line)
+                                                            and (sd is None or sd <= 4.0)),
+             model=TIER_MODEL, rate=.683, n=145, worth='+2.8u a season on ~9 picks, up 12 of 16 years',
+             eras='67 / 65 / 71 / 68%',
+             siblings='carryover 61.8%, steep 62.8%, 2.1-importance 67.7% (n=31), 2.2-travel 66.4%',
+             note='The best bucket on the board and the flattest -- no era below 65%, halves 66/69%. What it '
+                  'adds over the same weeks without the SD cut (59.8%) is the ensemble agreeing with itself, '
+                  'the one condition that survived on the totals side after it failed on the spread side.'),
+        dict(rule='weeks 1-12, the model off the total by 8 or more, ensemble SD at most 4.5',
+             test=lambda week, importance, sd, line, edge: (week <= 12 and edge is not None
+                                                            and abs(edge) >= 8 and (sd is None or sd <= 4.5)),
+             model=TIER_MODEL, rate=.634, n=101, worth='+1.3u a season on ~6 picks, up 11 of 16 years',
+             eras='– / 70 / 71 / 54%',
+             siblings='carryover 58.0%, steep 55.4%, 2.1-importance 52.5% (n=40), 2.2-travel 59.0%',
+             note='The one thing that works before week 9: not a better read on ordinary games, but the rare '
+                  'ones where the model is a touchdown-plus away from the market and its own runs agree. It '
+                  'covers September too, where nothing else does. The size of the disagreement is doing the '
+                  'work -- the same weeks at 5-7 points are 52-55%.'),
         dict(rule='weeks 5-8, posted total outside 42-46',
-             test=lambda week, importance, sd, line: 5 <= week <= 8 and not dead_total(line),
-             rate=.600, n=160, volume='about 10 a season', eras='58 / 59 / 59 / 63%',
-             siblings='carryover 60.0%, steep 52.5%, 2.1-importance 53.0%',
-             note='The flattest record of any bucket on this run -- every era within five points of the '
-                  'average -- and the model’s only edge in the part of the season the spread side cannot '
-                  'touch. The carryover run matches it exactly; the steep and 2.1 runs do not, which says the '
-                  'stat-weighting choice matters more here than anywhere else on the board.'),
-        dict(rule='weeks 9-12, posted total outside 42-46',
-             test=lambda week, importance, sd, line: 9 <= week <= 12 and not dead_total(line),
-             rate=.595, n=158, volume='about 10 a season', eras='59 / 55 / 65 / 57%',
-             siblings='carryover 58.5%, steep 57.7%, 2.1-importance 55.4%',
-             note='Same shape as weeks 5-8, half a point lower, which is the width of the A/S line rather '
-                  'than a real difference between them.'),
-        dict(rule='weeks 15-18, posted total outside 42-46',
-             test=lambda week, importance, sd, line: 15 <= week <= 18 and not dead_total(line),
-             rate=.563, n=151, volume='about 9 a season', eras='65 / 52 / 43 / 62%',
-             siblings='carryover 54.8%, steep 52.7%, 2.1-importance 50.5%',
-             note='The weakest era here (43% in 2018-21) is the reason this is a B and not an A: the average '
-                  'is fine, one four-season stretch was not. Adding an SD condition lifts it but leaves too '
-                  'few games to trust.'),
+             test=lambda week, importance, sd, line, edge: 5 <= week <= 8 and not dead_total(line),
+             model=TIER_MODEL, rate=.603, n=136, worth='+1.3u a season on ~9 picks, up 9 of 16 years',
+             eras='55 / 60 / 61 / 65%',
+             siblings='carryover 60.0%, steep 51.5%, 2.1-importance 53.8%, 2.2-travel 60.6%',
+             note='The model’s edge in the stretch the spread side cannot touch at all. The carryover and '
+                  'travel runs match it; the steep and 2.1 runs do not, so the stat-weighting choice matters '
+                  'more here than anywhere else on the board.'),
+        dict(rule='week 9 on, posted total outside 42-46, ensemble SD above 4.0',
+             test=lambda week, importance, sd, line, edge: week >= 9 and not dead_total(line),
+             model=TIER_MODEL, rate=.543, n=258, worth='+0.6u a season on ~16 picks, up 10 of 16 years',
+             eras='58 / 53 / 49 / 57%',
+             siblings='carryover 56.0%, steep 55.4%, 2.1-importance 52.3%, 2.2-travel 54.7%',
+             note='The other half of the SD split, kept rather than dropped because it holds on every run, '
+                  'but it is the thinnest thing on the board: one era (2018-21) sits at 49%, so this is a '
+                  'bucket to bet flat and not to press.'),
     ]),
 }
 # What the buckets deliberately leave out, and what it would have cost.
 NO_PICK = {
-    'spread': dict(rule='weeks 1-12 in any form, plus weeks 13-18 where the ensemble disagrees with itself',
-                   record='48.7% of 1862 would-be picks, -7.1% per bet', volume='about 116 a season',
-                   eras='47 / 47 / 52 / 50%',
-                   note='No era above break-even. Spreads before week 13 carry no measurable information -- '
-                        'an edge x SD sweep across all four backtest runs finds no cell that clears 54% in '
-                        'every run, and the tightest-SD games there are the worst of the lot.'),
-    'total': dict(rule='weeks 1-4, or a posted total of 42-46 in any week',
-                  record='49.5% of 564 would-be picks, -5.6% per bet', volume='about 35 a season',
-                  eras='47 / 53 / 52 / 47%',
-                  note='Two dead spots pooled: September, when the 20-week lookback is mostly last season '
-                       '(46.9%, and 37-41% in the older eras), and the 42-46 band, where this model is wrong '
-                       'in every era.'),
+    'spread': dict(model=TIER_MODEL, rule='every other spread: any week before 13, and late games with '
+                                          'nothing riding on them',
+                   record='49.8% of 2599 would-be picks, -4.9% per bet', worth='-8.0u a season on ~162 picks',
+                   eras='49 / 48 / 51 / 51%',
+                   note='No era above break-even, and not for want of looking. A gated sweep of every '
+                        'combination of week window, edge, ensemble SD, playoff leverage and line size -- '
+                        'about 1,800 rules, re-scored on all four backtests -- clears 54 rules here against '
+                        'the 59 that the same gate clears on coin-flip outcomes. The spread search finds no '
+                        'more than chance does, so everything outside the bucket above stays unbet.'),
+    'spread_shared': dict(model=SHARED_MODEL,
+                          rule='everything else: a disagreement of 6 points or more, and all of week 13 on',
+                          record='50.5% of 1490 would-be picks, -3.5% per bet',
+                          worth='-3.7u a season on ~106 picks', eras='50 / 49 / 51 / 55%',
+                          note='The two halves fail for opposite reasons. Big disagreements in weeks 1-12 '
+                               '(51.2% of 699) are where this model overreaches -- the further it strays from '
+                               'the market the worse it does, which is the reverse of the two-sided model. '
+                               'Week 13 on (49.9% of 791) is simply its blind spot, and 43.0% in weeks 13-14 '
+                               'is the worst window either architecture has.'),
+    'total': dict(model=TIER_MODEL, rule='everything else: weeks 1-4 without a big differential, the 42-46 '
+                                         'band, and any week the buckets above do not claim',
+                  record='46.3% of 395 would-be picks, -11.5% per bet', worth='-2.9u a season on ~25 picks',
+                  eras='45 / 49 / 50 / 42%',
+                  note='No era anywhere near break-even. Two dead spots pooled: September, when the 20-week '
+                       'lookback is mostly last season and only a huge disagreement means anything, and the '
+                       '42-46 band, where this model is wrong in every era.')
 }
 TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
 BAND_LABELS = {'S': '60%+', 'A': '57.5-60%', 'B': '54-57.5%'}
@@ -1231,24 +1300,34 @@ def tier_band(rate):
     return None
 
 
-def pick_bucket(market, week, importance=None, sd=None, line=None):
-    """The first bucket this pick falls in, or None if none covers it."""
-    for bucket in PICK_BUCKETS[market]['buckets']:
-        if bucket['test'](int(week), importance, sd, line):
+def market_key(market, running=None):
+    """Which bucket list serves this market for the model in hand. The spread
+    has two, one per architecture; whichever model built the packet picks."""
+    if market == 'spread' and (running or TIER_MODEL) == SHARED_MODEL:
+        return 'spread_shared'
+    return market
+
+
+def pick_bucket(market, week, importance=None, sd=None, line=None, edge=None, running=None):
+    """The first bucket this pick falls in, or None if none covers it. A
+    bucket measured on another model never applies -- see SHARED_MODEL."""
+    model = running or TIER_MODEL
+    for bucket in PICK_BUCKETS[market_key(market, running)]['buckets']:
+        if bucket['model'] == model and bucket['test'](int(week), importance, sd, line, edge):
             return bucket
     return None
 
 
-def pick_tier(market, week, importance=None, sd=None, line=None):
+def pick_tier(market, week, importance=None, sd=None, line=None, edge=None, running=None):
     """This pick's tier (S, A or B), or None when no bucket covers it -- which
     means it is not a pick at all; see NO_PICK. sd: the ensemble's
     disagreement. line: the market's own number (the posted total, or the
     spread). Either being None never blocks a bucket."""
-    bucket = pick_bucket(market, week, importance, sd, line)
+    bucket = pick_bucket(market, week, importance, sd, line, edge, running)
     return tier_band(bucket['rate']) if bucket else None
 
 
-def apply_tiers(frame, market):
+def apply_tiers(frame, market, running=None):
     """Tier every settled row, and let the tier decide what counts as a pick:
     an edge big enough to clear the threshold is necessary but not sufficient,
     because outside the buckets this model loses money (NO_PICK). Rows that no
@@ -1258,51 +1337,119 @@ def apply_tiers(frame, market):
     sd = np.sqrt(variance.clip(lower=0))
     importance = (data.total_game_importance if 'total_game_importance' in data
                   else pd.Series(np.nan, index=data.index))
-    data['tier'] = [pick_tier(market, week, imp, None if pd.isna(s) else float(s), line)
-                    for week, imp, s, line in zip(data.week, importance, sd, data.market_base)]
+    data['tier'] = [pick_tier(market, week, imp, None if pd.isna(s) else float(s), line, abs(edge), running)
+                    for week, imp, s, line, edge in zip(data.week, importance, sd, data.market_base, data.edge)]
     data['qualifies'] = data.qualifies & data.tier.notna()
     return data
 
 
-def tier_guide():
-    """The expandable key under the sheet: every bucket, its measured rate and
-    the band that rate earns it."""
+def tier_guide(running=None):
+    # running: the model behind one market, or {market: model} when the packet
+    # carries two -- each section is judged against ITS market's model, not
+    # the packet's first one.
+    """The expandable key under the sheet: every bucket, the run it was
+    measured on, its rate, and the band that rate earns it.
+
+    running: the model this packet was actually built with. If it isn't the
+    one the buckets were measured on, the guide says so at the top -- the
+    rates are model-specific (the spread S bucket alone swings from 60.0% to
+    49.4% across runs), so a mismatch makes them indicative at best."""
+    behind = running if isinstance(running, dict) else {m: running for m in ['spread', 'total']}
     sections = []
     for market, spec in PICK_BUCKETS.items():
+        owner = spec['buckets'][0]['model']
+        serves = market.replace('_shared', '')
+        live = behind.get(serves) in (None, owner)
         rows = ''
         for bucket in sorted(spec['buckets'], key=lambda b: -b['rate']):
             tier = tier_band(bucket['rate'])
             rows += (f'<tr><td><span class="tier-chip" style="background:{TIER_COLORS[tier]}">{tier}</span></td>'
                      f'<td>{escape(bucket["rule"])}</td>'
+                     f'<td class="tier-record">{escape(bucket["model"])}</td>'
                      f'<td class="tier-record">{100 * bucket["rate"]:.1f}% of {bucket["n"]} picks</td>'
-                     f'<td class="tier-record">{escape(bucket["volume"])}</td>'
+                     f'<td class="tier-record">{escape(bucket["worth"])}</td>'
                      f'<td class="tier-record">{escape(bucket["eras"])}</td>'
                      f'<td class="tier-record">{escape(bucket["siblings"])}</td></tr>'
-                     f'<tr class="tier-note-row"><td></td><td colspan="5">{escape(bucket["note"])}</td></tr>')
+                     f'<tr class="tier-note-row"><td></td><td colspan="6">{escape(bucket["note"])}</td></tr>')
         skip = NO_PICK[market]
         rows += (f'<tr><td><span class="tier-chip tier-chip-none">–</span></td>'
-                 f'<td>{escape(skip["rule"])}</td><td class="tier-record">{escape(skip["record"])}</td>'
-                 f'<td class="tier-record">{escape(skip["volume"])}</td>'
+                 f'<td>{escape(skip["rule"])}</td><td class="tier-record">{escape(skip["model"])}</td>'
+                 f'<td class="tier-record">{escape(skip["record"])}</td>'
+                 f'<td class="tier-record">{escape(skip["worth"])}</td>'
                  f'<td class="tier-record">{escape(skip["eras"])}</td><td class="tier-record">—</td></tr>'
-                 f'<tr class="tier-note-row"><td></td><td colspan="5">{escape(skip["note"])}</td></tr>')
+                 f'<tr class="tier-note-row"><td></td><td colspan="6">{escape(skip["note"])}</td></tr>')
         sections.append(
-            f'<h4>{escape(market.title())} picks</h4>'
+            f'<h4>{escape(market.replace("_shared", "").title())} picks · {escape(owner)}'
+            + ('' if live else ' <em>(not the model behind this column — shown for reference, '
+               'never fires here)</em>') + '</h4>'
             f'<p class="tier-qualify">A pick needs the model to disagree with the market by at least '
             f'{spec["edge"]:g} points, and to land in one of these buckets.</p>'
-            '<table class="tier-table"><thead><tr><th></th><th>Bucket</th><th>Measured</th>'
-            '<th>Volume</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
+            '<table class="tier-table"><thead><tr><th></th><th>Bucket</th><th>Model</th><th>Measured</th>'
+            '<th>Worth</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
             + rows + '</tbody></table>')
     bands = ', '.join(f'{tier} = {BAND_LABELS[tier]}' for tier, _ in TIER_BANDS)
-    return ('<details class="tier-guide"><summary>What the pick colours mean</summary>'
-            f'<p class="tier-qualify">The letter is the bucket’s measured hit rate, not a judgement: '
+    bottom = ('<p class="tier-note">All six buckets together: about 59 picks a season for +7.6 units at one '
+              'unit a bet, up in 15 of the 16 backtested seasons (worst -4.0u in 2014, best +18.2u in 2023). '
+              'The two S buckets in weeks 13-14 and the playoffs are half of that on a quarter of the picks, '
+              'and the two B buckets are 14% of it. A bucket only pays what its hit rate earns times how '
+              'often it fires, so a high rate on few games is worth less than it looks.</p>')
+    # Only worth warning about when a column's model has no buckets of its
+    # own: then the rates on show were measured on something else entirely.
+    owners = {spec['buckets'][0]['model'] for spec in PICK_BUCKETS.values()}
+    orphans = sorted({model for model in behind.values() if model and model not in owners})
+    mismatch = ''
+    if orphans:
+        mismatch = (f'<p class="tier-warn">This packet was built with {escape(", ".join(orphans))}, which has no '
+                    'buckets of its own — every rate below was measured on a different model. The buckets still '
+                    'decide the picks, but their hit rates do not describe this one; see "Other runs" for how '
+                    'far they move.</p>')
+    return ('<details class="tier-guide"><summary>What the pick colours mean</summary>' + mismatch
+            + f'<p class="tier-qualify">The letter is the bucket’s measured hit rate, not a judgement: '
             f'{bands}, and under 54% is no pick at all.</p>'
-            + ''.join(sections)
+            + ''.join(sections) + bottom
             + f'<p class="tier-note">Every rate is measured on the {escape(TIER_SOURCE)} — the run this packet '
               'builds — and nothing is averaged across models. "Other runs" is the same bucket on the carryover, '
               'steep-lookback and Model 2.1 backtests: different models, shown so you can see which buckets '
               'survive a change of model and which do not. Break-even at -110 is 52.4%. The dash row is not a weak pick, it is no '
               'pick: those games lose money, so the sheet leaves them blank rather than grading them. Hit rates '
               'are what a bucket did historically, not a forecast for any single pick.</p></details>')
+
+
+def running_model(folder, market=None):
+    """Which model wrote this packet's `market` pages -- 'Model 2.0 · weighted'
+    or 'Model 2.1 · shared'. Read per market, because a packet can carry two:
+    weeks 1-12 spreads come from the shared architecture and everything else
+    from the two-sided one (shared_scoring.SHARED_SPREAD_WEEKS). With no
+    market, the first config found answers, which is what a whole-packet
+    question (the tier guide's heading) wants. None if the folder predates
+    these configs or came from another pipeline."""
+    for name in ([market] if market else ['spread', 'total']):
+        path = Path(folder) / f'{name}_config.json'
+        if not path.exists():
+            continue
+        try:
+            config = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if config.get('tier_model'):        # written explicitly since the packet runs two models
+            return str(config['tier_model'])
+        label = str(config.get('model', '')).split(' · ')[0].strip()
+        preset = config.get('feature_calculation') or config.get('calculation')
+        if label and preset:
+            return f'{label} · {preset}'
+    return None
+
+
+def model_credits(behind):
+    """One line naming the model behind each column, because a packet can now
+    carry two and a pick means nothing without knowing which one made it."""
+    named = [(market, model) for market, model in behind.items() if model]
+    if not named or len({model for _, model in named}) == 1:
+        only = named[0][1] if named else None
+        return (f'<p class="model-credit">Every pick on this sheet: {escape(only)}.</p>') if only else ''
+    parts = ', '.join(f'{"spread" if market == "spread" else "total"} {escape(model)}' for market, model in named)
+    return (f'<p class="model-credit">Two models on this sheet — {parts}. Each column is graded against the '
+            'buckets measured on its own model; they are not interchangeable.</p>')
 
 
 def tier_legend(markets=('spread', 'total')):
@@ -1312,10 +1459,10 @@ def tier_legend(markets=('spread', 'total')):
                     f'{escape(tier)} {escape(BAND_LABELS[tier])}</span>' for tier, _ in TIER_BANDS)
     return (f'<div class="tier-legend"><strong>Hit rate</strong>{items}'
             '<span class="tier-key"><i class="tier-swatch-none"></i>– under 54%, no bet</span>'
-            f'<span class="tier-note">Measured on the {escape(TIER_SOURCE)}. Break-even is 52.4%.</span></div>')
+            f'<span class="tier-note">Measured on {escape(TIER_SOURCE)}. Break-even is 52.4%.</span></div>')
 
 
-def copy_picks_widget(season, week, light_table):
+def copy_picks_widget(season, week, light_table, model=None):
     """A "Copy" button for a picture of the picks table (picks_png, drawn
     in Python when the packet is built, so it exists no matter where the
     file is opened). Clicking it puts that PNG on the clipboard where the
@@ -1328,7 +1475,7 @@ def copy_picks_widget(season, week, light_table):
     checkbox: it reveals the picture itself, which any browser lets you
     right-click (desktop) or long-press (phone) to copy or save. When a
     script copy succeeds, the click is cancelled before the checkbox flips."""
-    subtitle = f'{int(season)} Week {int(week)}'
+    subtitle = f'{int(season)} Week {int(week)}' + (f' · {model}' if model else '')
     legend = [(TIER_COLORS[tier], f'{tier}  hit rate {BAND_LABELS[tier]}') for tier, _ in TIER_BANDS]
     legend.append(('#ffffff', '–  under 54%, no bet'))
     png, width = picks_png(light_table, 'Model', subtitle, legend=legend)
@@ -1527,7 +1674,7 @@ def headline_table(folder, light=False):
         if path.exists():
             cutoffs = HIGH_CONFIDENCE_CUTOFFS[market]
             frames[market] = apply_tiers(settle(pd.read_csv(path), cutoffs['diff_cutoff'],
-                                                cutoffs['sd_cutoff']), market)
+                                                cutoffs['sd_cutoff']), market, running_model(folder, market))
     if not frames:
         return ''
     base = next(iter(frames.values()))
@@ -1647,7 +1794,8 @@ def headline_table(folder, light=False):
              .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'Picks',
                              'O/U', 'Model', 'Diff', 'Picks'], axis=1)
              .apply(tier_styles, axis=None))
-    return styled.to_html() + tier_legend() + tier_guide()
+    behind = {market: running_model(folder, market) for market in ['spread', 'total']}
+    return styled.to_html() + model_credits(behind) + tier_legend() + tier_guide(behind)
 
 
 def write_packets(predictions, panel, importance, config, root):
@@ -1679,7 +1827,12 @@ def write_packets(predictions, panel, importance, config, root):
         header = packet_tabs(market) + f'<h1>{title}</h1>'
         from backtester import settle
         cutoffs = HIGH_CONFIDENCE_CUTOFFS[market]
-        games = apply_tiers(settle(games, cutoffs['diff_cutoff'], cutoffs['sd_cutoff']), market)
+        # config knows which model produced these predictions; the folder does
+        # not yet -- {market}_config.json is written further down, after the
+        # pages are rendered. Reading the folder here silently fell back to
+        # the default model and threw away every shared-model pick.
+        running = config.get('tier_model') or running_model(folder, market)
+        games = apply_tiers(settle(games, cutoffs['diff_cutoff'], cutoffs['sd_cutoff']), market, running)
         cards = []
         for _, row in games.iterrows():
             lean = (row.away_team if row.edge > 0 else row.home_team) if market == 'spread' else ('OVER' if row.edge > 0 else 'UNDER')
@@ -1701,6 +1854,7 @@ def write_packets(predictions, panel, importance, config, root):
         # shared network (see fit_two_sided and matchup_attribution); other
         # model families get the generic version.
         spread_page = market == 'spread'
+        behind_page = running
         travelling = 'attr_away_travel_adv' in games.columns
         notes = [
             # An SD condition is optional per market; neither uses one now.
@@ -1780,7 +1934,8 @@ def write_packets(predictions, panel, importance, config, root):
                            for name in ['spread', 'total'] if (folder / f'{name}_importance.html').exists())
         (folder / 'importance.html').write_text(page(title, packet_tabs('importance') + evidence, 'packet'), encoding='utf-8')
         headline = (f'<h1>Model</h1><p class="report-date">{int(season)} · Week {int(week)}</p>'
-                   + copy_picks_widget(season, week, headline_table(folder, light=True)) + headline_table(folder))
+                   + copy_picks_widget(season, week, headline_table(folder, light=True),
+                                       running_model(folder)) + headline_table(folder))
         (folder / 'index.html').write_text(page(title, packet_tabs('headline') + headline, 'packet headline-shell'), encoding='utf-8')
         (folder / 'stats.html').write_text(page(title, packet_tabs('stats') + '<h1>Stats</h1>'
             + stats_tables(snapshot, games, season, week, config['lookback'], weighted_snapshot), 'packet headline-shell'), encoding='utf-8')
@@ -1975,13 +2130,19 @@ if __name__ == '__main__':
     parser.add_argument('--restyle', action='store_true',
                         help='The opposite of --refresh: re-render saved predictions without pulling or fitting '
                              'anything (neural packets only -- two-sided packets no longer keep the CSVs it needs)')
-    parser.add_argument('--lookback', type=int, default=20)
-    parser.add_argument('--train-window', type=int, default=100, help='Two-sided only: training REG weeks')
+    # None means "whatever the model profile says" (model_spec.PROFILES).
+    # These are model properties: the tier rates were measured at a specific
+    # lookback and training window, so overriding them detaches the sheet's
+    # numbers from what is being bet. The packet says so when you do.
+    parser.add_argument('--lookback', type=int, default=None,
+                        help="Override the model profile's stat lookback (default: the profile's own)")
+    parser.add_argument('--train-window', type=int, default=None,
+                        help="Override the model profile's training REG weeks (default: the profile's own)")
     parser.add_argument('--model-version', choices=list(f'model_{v}' for v in model_spec.VERSIONS), default='model_2.0',
                         help='Which model version to build: model_2.0 (default), model_2.1 (adds the EPA inputs) '
                              'or model_2.2 (adds the travel-distance input). Each writes to its own '
                              'data/results/model_*/ folder.')
-    parser.add_argument('--calculation', default='weighted',
+    parser.add_argument('--calculation', default=None,
                         help="Stat recency preset (data_crunchski_2.DECAY_PRESETS): 'weighted' (default), "
                              "'steep', or 'carryover' (weighted, with earlier-season games counted half)")
     parser.add_argument('--iterations', type=int, default=100)
@@ -1997,7 +2158,8 @@ if __name__ == '__main__':
     if args.restyle:
         if args.refresh:
             parser.error('--restyle re-renders what is already saved; --refresh refits from new data. Pick one.')
-        refresh_packet(args.season, args.week, args.lookback, shared=args.model != 'neural')
+        refresh_packet(args.season, args.week, args.lookback or model_spec.profile()['lookback'],
+                       shared=args.model != 'neural')
     else:
         if args.refresh:
             refresh_inputs(args.season, args.week, shared=args.model != 'neural',
@@ -2008,4 +2170,5 @@ if __name__ == '__main__':
                              args.epochs, args.seed, args.jobs, args.weather_file, args.forecast_file,
                              calc=args.calculation)
         else:
-            neural_packet(args.season, args.week, args.lookback, args.iterations, args.seed)
+            neural_packet(args.season, args.week, args.lookback or model_spec.profile()['lookback'],
+                          args.iterations, args.seed)

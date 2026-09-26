@@ -291,8 +291,45 @@ def market_details(details, market):
     return result
 
 
-def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100, epochs=100,
-                     seed=1337, jobs=None, weather_file=None, forecast_file=None, calc='weighted'):
+# Weeks the shared architecture is allowed to own. Its measured edge is a
+# weeks 1-12 spread band (54.9%); from week 13 it is 49.6%, and 43.0% in weeks
+# 13-14, while the two-sided model is 60.7% there. The two are complements,
+# so the packet runs whichever one owns the week.
+
+
+
+def fit_profile(data, season, week, settings, iterations=100, epochs=100, seed=1337, jobs=8):
+    """Fit one model profile on an already-sliced training set, exactly the
+    way its backtest ran: its input set (2.1 adds EPA), its architecture, its
+    input representation.
+
+    Returns (target, details, importance) in market_details' schema, so the
+    packet pages read every profile's output the same way.
+
+    Switches data_crunchski_3's shared metric lists to this profile's version
+    for the fit and puts them back afterwards -- they are process-global, and
+    the profile fit before this one needs its own set."""
+    import model_spec
+    was = model_spec.VERSION
+    try:
+        model_spec.select(settings['version'])
+        if settings['architecture'] == 'two-sided':
+            details, importance = fit_two_sided(data, int(season), int(week), iterations, epochs, seed, jobs)
+            target = data[(data.season == season) & (data.week == week)]
+            return target, details, importance
+        return fit_panel(data, int(season), int(week), iterations, epochs, seed, jobs, (),
+                         settings['inputs'])
+    finally:
+        model_spec.select(was)
+
+
+def two_sided_packet(season, week, lookback=None, train_window=None, iterations=100, epochs=100,
+                     seed=1337, jobs=None, weather_file=None, forecast_file=None, calc=None):
+    """lookback/train_window/calc default to None, meaning 'whatever each
+    model profile says' (model_spec.PROFILES). They are model properties, not
+    run options: a bucket's hit rate was measured at a particular lookback and
+    window, so passing your own detaches the rates on the sheet from what is
+    actually being bet. Doing it anyway is allowed and says so out loud."""
     """Single-week two-sided packet -- same model/inputs as backtester.py's
     --model two-sided (league z-scores, symmetric usage scaling, historical
     weather), but one target week instead of a season-long backtest, written
@@ -319,6 +356,15 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     from backtester import KEY, build_panel, history_weeks, market_panel, settle
     from weekly_packet import write_packets
     import model_spec
+    markets, order = model_spec.lineup(week)
+    overrides = {k: v for k, v in dict(lookback=lookback, train_window=train_window,
+                                       calculation=calc).items() if v is not None}
+    profiles = {name: dict(model_spec.profile(name), **overrides) for name in order}
+    if overrides:
+        print(f'Overriding model settings from the command line: {overrides}. The tier rates on the sheet '
+              'were measured with each profile\'s own settings and no longer describe these.', flush=True)
+    primary = profiles[model_spec.DEFAULT_PROFILE]
+    lookback, train_window, calc = primary['lookback'], primary['train_window'], primary['calculation']
     print(f'{model_spec.LABEL} · code {model_spec.code_version()} · {season} week {week} '
           f'-> {model_spec.run_folder(season, week, lookback)}', flush=True)
     sched = pd.read_parquet('data/sched.parquet')
@@ -338,6 +384,32 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         default_forecast = Path('data/weather/forecasts.parquet')
         forecast_file = default_forecast if default_forecast.exists() else None
     span = history_weeks(SimpleNamespace(start_season=season, season=season, week=week))
+
+    def prepared(settings):
+        """A weather-attached panel for one profile's lookback/preset. Same
+        panel object when two profiles agree, which they do today."""
+        if (settings['lookback'], settings['calculation']) == (lookback, calc):
+            return panel
+        print(f"  {settings['name']} wants lookback {settings['lookback']} / "
+              f"{settings['calculation']} stats -- building its own panel", flush=True)
+        other = build_panel(season, week, span + settings['train_window'] - 20,
+                            settings['lookback'], settings['calculation'], use_scaling=False)
+        other = dc3.attach_historical_weather(other, weather_file, forecast_file)
+        if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:
+            import travel
+            other = travel.attach_travel(other)
+        return other
+
+    def training_slice(frame, settings):
+        """The last train_window regular weeks before the target, plus it."""
+        rows = frame[(frame.season == season) & (frame.week == week)]
+        before = frame[frame.week_id < int(rows.week_id.iloc[0])]
+        weeks = sorted(before.loc[before.game_type.eq('REG'), 'week_id'].unique())
+        if len(weeks) < settings['train_window']:
+            raise ValueError(f"{season} wk{week}: {settings['name']} needs "
+                             f"{settings['train_window']} prior regular weeks; got {len(weeks)}")
+        return pd.concat([before[before.week_id >= weeks[-settings['train_window']]], rows]).sort_values(KEY)
+
     panel = build_panel(season, week, span + train_window - 20, lookback, calc, use_scaling=False)
     try:
         panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
@@ -352,14 +424,32 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         print(f'{error}\nPulling a live weather forecast for {season} wk{week} to fill the gap...', flush=True)
         import pull_weather
         forecast_file = Path(forecast_file or 'data/weather/forecasts.parquet')
+        forecast_failure = None
         try:
             games = pull_weather.scheduled_games(season, week, 'live', decision_hours=24)
             pull_args = SimpleNamespace(mode='live', decision_hours=24, publication_hours=8,
                                         output=str(forecast_file), cache_dir='data/cache/open_meteo', refresh=False)
             pull_weather.pull(games, pull_args)
-        except Exception as pull_error:
-            raise ValueError(f'{error} (auto-pull also failed: {pull_error})') from pull_error
-        panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+        except Exception as pull_error:      # the reanalysis pass below may still cover it
+            forecast_failure = pull_error
+            print(f'  live forecast pull failed: {pull_error}', flush=True)
+        try:
+            panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+        except ValueError as still_missing:
+            # A game that has already kicked off is past the forecast cutoff
+            # and its archived run is not published yet, so neither forecast
+            # path can reach it -- but ERA5 does, within a day or two. This is
+            # the ordinary case for a packet built mid-week, after Thursday
+            # night, so pull the season's observed weather and rebuild rather
+            # than making it a manual step.
+            print(f'{still_missing}\nPulling observed weather for {season} (games already played)...', flush=True)
+            try:
+                pull_weather.pull_historical([season])
+                pull_weather.build_weather_features()
+            except Exception as historical_error:
+                raise ValueError(f'{still_missing} (forecast: {forecast_failure}; '
+                                 f'reanalysis: {historical_error})') from historical_error
+            panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
     if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:   # Model 2.2's input
         import travel
         panel = travel.attach_travel(panel)
@@ -383,6 +473,7 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
         features=[c for c in dc3.two_sided_rows(target_rows) if c not in BASE_CONTEXT],
         weather_file=weather_file, forecast_file=forecast_file)
     config = dict(model=f'{model_spec.LABEL} · {iterations} members', calculation=model_spec.ID, spec=spec,
+                  tier_model=f'{model_spec.LABEL} · {calc}',
                   feature_calculation=calc, lookback=lookback, train_window=train_window, status='PASS',
                   attribution_schema=2,
                   reason=f'Pick cutoffs come from earlier backtests and are not re-validated for {model_spec.LABEL}',
@@ -402,14 +493,38 @@ def two_sided_packet(season, week, lookback=20, train_window=100, iterations=100
     # saved packet without refitting -- the *_details.csv/*_importance.csv
     # it needs for that no longer get kept on disk. That's an accepted
     # tradeoff for not cluttering data/results/, not an oversight.
+    # Weeks 1-12 spreads belong to the shared architecture; everything else
+    # to the two-sided one. Fit the second model only when the week calls for
+    # it -- see SHARED_SPREAD_WEEKS.
+    sources = {market: (details, importance, config) for market in ['spread', 'total']}
+    for market, name in markets.items():
+        if name == model_spec.DEFAULT_PROFILE:
+            continue
+        settings = profiles[name]
+        print(f"{market} picks in week {week} belong to {name}: fitting it alongside "
+              f"(lookback {settings['lookback']}, {settings['calculation']} stats, "
+              f"training window {settings['train_window']})...", flush=True)
+        other_data = training_slice(prepared(settings), settings)
+        _, other_details, other_importance = fit_profile(
+            other_data, season, week, settings, iterations, epochs, seed, jobs or min(iterations, 8))
+        sources[market] = (other_details, other_importance, dict(
+            config, model=f'{name} · {iterations} members', tier_model=name,
+            feature_calculation=settings['calculation'], lookback=settings['lookback'],
+            train_window=settings['train_window'],
+            reason=f'{market.title()} picks this week come from {name}, the profile whose backtest measured '
+                   'above break-even in this part of the season',
+            baseline_note='The shared model scores both teams with one function on differential inputs; '
+                          'the baseline is the average training game.'))
     final_folder = model_spec.run_folder(season, week, lookback)
     with tempfile.TemporaryDirectory() as scratch:
         scratch_output = Path(scratch)
         for market in ['spread', 'total']:
+            market_source, market_importance, market_config = sources[market]
             predictions = market_panel(target_rows, market).merge(
-                market_details(details, market), on=['away_team', 'home_team'], validate='one_to_one')
+                market_details(market_source, market), on=['away_team', 'home_team'], validate='one_to_one')
             predictions['edge'] = predictions.prediction - predictions.market_base
-            write_packets(settle(predictions), panel, importance, dict(config, market=market), scratch_output)
+            write_packets(settle(predictions), panel, market_importance,
+                          dict(market_config, market=market), scratch_output)
         scratch_folder = scratch_output / f'{season}_{week:02d}'
         bundled = scratch_folder / 'packet.html'
         if not bundled.exists():
