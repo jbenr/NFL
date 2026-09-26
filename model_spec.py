@@ -1,12 +1,22 @@
 """Model 2.0 -- the weekly model's name, version, results folder, and the
 spec written at the version root so packets say exactly which model made them.
 
-Each run folder, data/results/model_2.0/{season}_{week}_{lookback}/, gets:
-    packet_{yy}w{week}.html  the packet
-and data/results/model_2.0/model.json gets this spec: version, code commit,
-every setting and method, and the latest run's training window. README.md is
-the same spec in plain English (rewritten on every run, so it always matches
-the latest code).
+Two kinds of output, filed apart on purpose:
+
+    data/results/packets/{season}/wk{week}/   a WEEK's packet
+        packet_{yy}w{week}.html               the packet
+        models.json                           which profile produced which
+                                              market, each one's full recipe,
+                                              and the primary model's spec
+
+    data/results/model_{version}/             a MODEL's documentation
+        model.json / README.md                version, code commit, every
+                                              setting and method
+
+Packets are keyed on the week rather than a model because one packet now
+carries several: weeks 1-12 spreads come from one profile and everything else
+from another (see PROFILES and owner()). Filing a packet under 'model_2.0/'
+named whichever model happened to produce the minority of it.
 
 The values come from the code and the run itself (feature lists, decay
 presets, cutoffs, layer sizes, training span), not from a hand-kept copy,
@@ -121,8 +131,40 @@ def select(version):
     return VERSION
 
 
-def run_folder(season, week, lookback):
+PACKETS = Path('data/results/packets')
+
+
+def packet_folder(season, week):
+    """Where a week's packet lives: data/results/packets/{season}/wk{week}.
+
+    Keyed on the week, not on a model, because a packet is no longer one
+    model's output -- weeks 1-12 spreads come from one profile and everything
+    else from another (see owner()). Filing it under 'model_2.0/' named the
+    minority contributor. What ran is recorded inside the folder, in
+    models.json, where it can describe all of them."""
+    return PACKETS / str(int(season)) / f'wk{int(week):02d}'
+
+
+def run_folder(season, week, lookback=None):
+    """Deprecated: the pre-2026 per-version layout. Kept so old folders
+    already on disk can still be located; new packets use packet_folder()."""
     return RESULTS / f'{season}_{week}_{lookback}'
+
+
+def packet_manifest(season, week, markets, profiles, spec):
+    """What produced this packet: which profile owns which market, the exact
+    recipe each one ran, and the primary model's full spec. Written next to
+    the packet so a saved week explains itself without the repo."""
+    return {
+        'packet': {'season': int(season), 'week': int(week),
+                   'generated': f'{datetime.now():%Y-%m-%d %H:%M}', 'code': code_version()},
+        'models': {market: {'profile': name, **{k: v for k, v in profiles[name].items() if k != 'name'}}
+                   for market, name in markets.items()},
+        'why_split': ('Each market is produced by the profile whose backtest measured above break-even in '
+                      'that part of the season; the packet grades each column against the buckets measured '
+                      'on its own model. See weekly_packet.PICK_BUCKETS.'),
+        'primary_model_spec': spec,
+    }
 
 
 def code_version():
@@ -287,10 +329,16 @@ def readme(model):
     return '\n'.join(lines)
 
 
-def write(folder, model):
-    """model.json and README.md into the version folder."""
+def write_manifest(folder, manifest):
+    """models.json beside the packet."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
-    RESULTS.mkdir(parents=True, exist_ok=True)
+    (folder / 'models.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def write(model):
+    """model.json and README.md into the version folder -- documentation of a
+    MODEL, which is why it stays under data/results/model_{version}/ while the
+    packets themselves file by week (packet_folder)."""
     (RESULTS / 'model.json').write_text(json.dumps(model, indent=2, ensure_ascii=False), encoding='utf-8')
     (RESULTS / 'README.md').write_text(readme(model), encoding='utf-8')

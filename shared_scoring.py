@@ -515,7 +515,9 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
                    'above break-even in this part of the season',
             baseline_note='The shared model scores both teams with one function on differential inputs; '
                           'the baseline is the average training game.'))
-    final_folder = model_spec.run_folder(season, week, lookback)
+    # Filed by week, not by model: this packet carries more than one (see
+    # model_spec.packet_folder).
+    final_folder = model_spec.packet_folder(season, week)
     with tempfile.TemporaryDirectory() as scratch:
         scratch_output = Path(scratch)
         for market in ['spread', 'total']:
@@ -537,9 +539,14 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
         final_folder.mkdir(parents=True, exist_ok=True)
         final_path = final_folder / f'packet_{season % 100:02d}w{week}.html'
         shutil.move(str(bundled), str(final_path))
-    model_spec.write(final_folder, spec)
+    # models.json beside the packet says which profile produced which market;
+    # the per-version model.json/README stay where they are, since they
+    # document a model rather than a run.
+    model_spec.write_manifest(final_folder, model_spec.packet_manifest(season, week, markets, profiles, spec))
+    model_spec.write(spec)
     print(f'Packet: {final_path}')
-    print(f'Model spec: {model_spec.RESULTS / "model.json"}')
+    print(f'Models: {final_folder / "models.json"}  ·  '
+          + ', '.join(f'{market} {name}' for market, name in markets.items()))
     return details
 
 

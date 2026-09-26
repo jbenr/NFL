@@ -23,6 +23,15 @@ environment variable.
 
     pack_a_punch             # send the newest packet
     pack_a_punch --dry-run   # show what would be sent, send nothing
+    pack_a_punch --newest    # print the newest packet's path and exit
+
+Pulling to another machine instead of emailing? Ask this script where the
+packet is rather than hardcoding a path -- the results folder is named after
+the model version and moves when that changes:
+
+    remote=jimbo@wsl-box            # whatever your ssh target is
+    path=$(ssh $remote 'cd ~/werk/NFL && python pack_a_punch.py --newest')
+    scp "$remote:$path" ~/Downloads/
 """
 import argparse
 import base64
@@ -54,8 +63,10 @@ def newest_packet():
 
 
 def describe(packet):
-    """'2026 Week 2' from a results folder like 2026_2_20 (season_week_lookback)."""
-    found = re.search(r'(\d{4})_(\d{1,2})_\d+', str(packet.relative_to(RESULTS)))
+    """'2026 Week 3', from either layout: packets/{season}/wk{week}/ (current)
+    or the older {season}_{week}_{lookback}/ run folders."""
+    where = str(packet.relative_to(RESULTS))
+    found = re.search(r'(\d{4})[/\\]wk(\d{1,2})', where) or re.search(r'(\d{4})_(\d{1,2})_\d+', where)
     return f'{found.group(1)} Week {int(found.group(2))}' if found else packet.stem
 
 
@@ -107,8 +118,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Email the newest weekly packet.')
     parser.add_argument('--to', default=RECIPIENT)
     parser.add_argument('--dry-run', action='store_true', help='Find and package the packet, but send nothing')
+    parser.add_argument('--newest', action='store_true',
+                        help='Print the newest packet\'s absolute path and exit. For pulling from another '
+                             'machine: let this script find the file, so the caller never hardcodes a folder '
+                             'that a later model version renames.')
     args = parser.parse_args(argv)
     packet = newest_packet()
+    if args.newest:
+        print(packet.resolve())
+        return
     message = build_message(packet, args.to)
     encoded = len(message.as_bytes())
     inline = 'headline table in the body' if message.is_multipart() and any(
