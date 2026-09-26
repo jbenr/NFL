@@ -24,20 +24,23 @@ pack_a_punch() {
     local remote="${PACK_A_PUNCH_REMOTE:-}"
     local dest="${PACK_A_PUNCH_DEST:-$HOME/Downloads}"
     local python="${PACK_A_PUNCH_PYTHON:-python}"
-    local path
+    # NOT `local path` -- in zsh, `path` is a special array tied to $PATH;
+    # declaring it local blanks $PATH for the rest of this function and
+    # every external command below ("ssh", "scp", "cp") stops resolving.
+    local pkt
 
     if [ -n "$remote" ]; then
-        path=$(ssh "$remote" "cd '$repo' && $python pack_a_punch.py --newest") || return 1
-        [ -n "$path" ] || { echo "pack_a_punch: no packet on $remote" >&2; return 1; }
-        echo "Pulling $remote:$path"
-        scp -q "$remote:$path" "$dest/" || return 1
+        pkt=$(ssh "$remote" "cd '$repo' && $python pack_a_punch.py --newest") || return 1
+        [ -n "$pkt" ] || { echo "pack_a_punch: no packet on $remote" >&2; return 1; }
+        echo "Pulling $remote:$pkt"
+        scp -q "$remote:$pkt" "$dest/" || return 1
     else
-        path=$(cd "$repo" && $python pack_a_punch.py --newest) || return 1
-        [ -n "$path" ] || { echo "pack_a_punch: no packet in $repo" >&2; return 1; }
-        cp "$path" "$dest/" || return 1
+        pkt=$(cd "$repo" && $python pack_a_punch.py --newest) || return 1
+        [ -n "$pkt" ] || { echo "pack_a_punch: no packet in $repo" >&2; return 1; }
+        cp "$pkt" "$dest/" || return 1
     fi
 
-    local saved="$dest/$(basename "$path")"
+    local saved="$dest/$(basename "$pkt")"
     echo "Saved: $saved"
     # `open` only exists on the Mac, and a plain `&&` here would make its
     # absence the function's exit status on every other machine.
