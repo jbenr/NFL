@@ -310,16 +310,29 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .packet .pill.pick{background:#cfd5db;color:#222}.pill.pick.tier-S{background:#e3c4ff}.pill.pick.tier-A{background:#b9e4c4}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
 .sheet-notes p{font-size:13px;line-height:1.5;color:#c8cdd3;margin:10px 0}.sheet-notes strong{color:#eee}
 .pick-header{overflow-x:auto;border-bottom:1px solid #333;padding:10px 0 16px;margin-bottom:12px}
-.pick-grid{display:grid;grid-template-columns:160px repeat(5,minmax(60px,1fr)) 160px;min-width:700px;align-items:center;gap:6px 8px;text-align:center;font-variant-numeric:tabular-nums}
-.pick-label{font:10px Arial,sans-serif;color:#9ba8b5}.pick-label:first-child,.pick-label:nth-child(7){font:12px Graduate,Georgia,serif}.pick-label:first-child,.pick-qb{text-align:left}.pick-label:nth-child(7),.pick-qb.home{text-align:right}
+.pick-grid{display:grid;grid-template-columns:minmax(120px,1fr) auto minmax(120px,1fr);align-items:center;gap:4px 10px;text-align:center;font-variant-numeric:tabular-nums}
+/* The five numbers stay one tight group between the team names rather than
+   being stretched over the full width, and each keeps its label on top. */
+.pick-numbers{display:flex;justify-content:center;align-items:flex-end;gap:14px}
+.pick-cell{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:46px}
+.pick-label{font:9px Arial,sans-serif;letter-spacing:.03em;text-transform:uppercase;color:#8c99a6}
+.pick-qb{text-align:left}.pick-qb.home{text-align:right}
+.record{font:13px Arial,sans-serif;color:#9ba8b5;font-weight:400}
+@media(max-width:650px){.pick-grid{gap:2px 6px}.pick-numbers{gap:8px}.pick-cell{min-width:38px}
+ .pick-value{font-size:14px}.pick-team{font-size:18px;gap:4px}.pick-team .logo{width:38px;height:38px}
+ .record{font-size:11px}.pick-qb{font-size:11px}}
 .pick-team{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font:24px Graduate,serif}.pick-team.home{justify-content:flex-end}.pick-team .logo{width:52px;height:52px}
 .pick-value{font-size:15px;font-weight:600}.pick-qb{font:12px Graduate,Georgia,serif;white-space:nowrap}
-.pick-score{grid-column:2/7;display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:baseline;font:12px Graduate,Georgia,serif;color:#9ba8b5}
+.pick-score{grid-column:2;display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:baseline;font:12px Graduate,Georgia,serif;color:#9ba8b5}
 .pick-score .score-label{justify-self:end}.pick-score .score-value{color:#eee}
 summary.matchup-summary{padding-left:0}summary.matchup-summary:before{left:-12px}
 .site-row{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter);gap:var(--row-gap);align-items:center;margin:12px 0;font-size:11px}
 .site-label{white-space:nowrap}.site-label strong{margin-right:8px}.site-row .context-value{font-size:11px}
 .site-row .context-value{text-align:right}
+/* Reference facts under the context bars -- separated by dots, wrapping to a
+   second line on a phone rather than being cut off. */
+.game-facts{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 0;margin:10px 0 2px;font:11px Arial,sans-serif;color:#9ba8b5}
+.game-facts span:not(:last-child):after{content:'·';margin:0 7px;color:#5d6873}
 /* Weather: a heading, then one tight row per model input (matchup_attribution). */
 .context-group{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:11px;font-weight:700;margin:14px 0 2px}
 .context-group .context-value{font-size:11px;font-weight:400}
@@ -450,6 +463,10 @@ def display_stats(season, week, lookback, calculation='mean'):
     return result
 
 
+# Per-play metrics measured in points rather than as a share of plays.
+POINTS_PER_PLAY = {'pass_epa_pp', 'run_epa_pp'}
+
+
 def stat_cell(stats, team, unit, metric, rank_before=False):
     column = f'{unit}_{metric}'
     if stats.empty or column not in stats or team not in stats.team.values:
@@ -458,7 +475,13 @@ def stat_cell(stats, team, unit, metric, rank_before=False):
     value = values.loc[team]
     if pd.isna(value):
         return '—'
-    formatted = f'{value:.1%}' if '%' in metric or metric.endswith('_pp') else f'{value:.1f}'
+    # '_pp' means per play, which is a RATE for first downs, turnovers and
+    # penalties (33.3% of plays) but POINTS for EPA (0.153 points a play).
+    # Formatting the second as the first turned expected points added into a
+    # percentage of nothing.
+    formatted = (f'{value:+.3f}' if metric in POINTS_PER_PLAY
+                 else f'{value:.1%}' if '%' in metric or metric.endswith('_pp')
+                 else f'{value:.1f}')
     lower_off = metric in ['turnovers_pp', 'stuff_%', 'sack_%', 'qb_hit_%', 'penalties_pp']
     ascending = lower_off if unit == 'off' else not lower_off
     if metric == 'penalties_pp':
@@ -587,6 +610,34 @@ def context_cells(feature, row):
     return 'Rest', f'{row.away_team} {away:g}d', f'{row.home_team} {home:g}d'
 
 
+def game_facts(row):
+    """The reference line under the context bars: when, where, on what, in
+    what, and who is officiating. One line, two at most on a phone. None of
+    it is a model input except the weather numbers, which appear as their own
+    bars above -- this is the context a human wants when reading a pick."""
+    game = schedule_game(row)
+    if game is None:
+        return ''
+    kickoff, readings = weather_details(row)
+    surface = str(game.get('surface')).strip() if pd.notna(game.get('surface')) else ''
+    venue = str(game.get('stadium')) if pd.notna(game.get('stadium')) else ''
+    if str(game.get('location', '')).lower() == 'neutral':
+        venue += ' · neutral site'
+    def reading(key):
+        text = re.sub(r'\s*[(][^)]*[)]', '', readings.get(key, '')).strip()
+        return '' if key == 'precip_inches' and text.startswith(('0.00', '0 ')) else text
+
+    wet = reading('precip_inches')
+    conditions = ' · '.join(p for p in [reading('feels_like_f'), reading('wind_mph'), wet or 'dry'] if p)
+    referee = str(game.get('referee')) if pd.notna(game.get('referee')) else ''
+    travel = game.get('away_travel_miles')
+    trip = f'{row.away_team} travelled {travel:,.0f} mi' if pd.notna(travel) and travel >= 1 else ''
+    parts = [kickoff, venue, SURFACES.get(surface.lower(), surface.title()), conditions, trip,
+             f'Ref: {referee}' if referee else '']
+    shown = ''.join(f'<span>{escape(part)}</span>' for part in parts if part)
+    return f'<div class="game-facts">{shown}</div>' if shown else ''
+
+
 def matchup_attribution(row, stats, panel, shared=False, differential=False):
     direction = 1 if row.get('market') == 'total' else -1
     # One entry per model feature, never combined or dropped for display:
@@ -612,7 +663,7 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
             metric = feature[len(prefix):]
             cells = [stat_cell(stats, row.away_team, away_unit, metric),
                      stat_cell(stats, row.home_team, home_unit, metric, rank_before=True)]
-            label = 'QB Elo / allowed' if metric == 'qb_elo' else pretty(metric)
+            label = pretty(metric)
             value = values[feature]
             rows.append(f'<div class="stat-row"><div class="stat-line"><div class="stat-name">{escape(label)}</div><div class="stat-number">{cells[0]}</div>'
                         f'{point_bar(value, scale, row, left_team=row.away_team)}'
@@ -650,6 +701,7 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
         other.append(f'<div class="stat-line context-row"><div class="stat-name">{label}</div>'
                      f'<div class="context-value">{left}</div>{point_bar(value, scale, row)}'
                      f'<div class="context-value">{right}</div></div>')
+    other.append(game_facts(row))
     # two_sided_packet's weather inputs, one row each under a small heading
     # carrying the kickoff time, each with the value it had on the right.
     weather_order = ['feels_like_f', 'wind_mph', 'precip_inches']
@@ -886,7 +938,7 @@ def pretty(feature):
         return pretty(feature[len('diff_'):]) + ' · off − def'
     labels = {'fourth_down_%': '4th-down conversion', 'third_down_%': '3rd-down conversion',
               'pass_completion_%': 'Pass completion', 'series_success_%': 'Series success',
-              'stuff_%': 'Runs stopped at / behind line', 'sack_%': 'Sacks / pass play',
+              'stuff_%': 'Runs stuffed', 'sack_%': 'Sacks / pass play',
               'qb_hit_%': 'QB hits / pass play', 'penalties_pp': 'Penalty flags / play',
               'first_down_pp': 'First downs / play', 'turnovers_pp': 'Turnovers / play',
               'explosive_run_%': 'Runs of 10+ yards', 'explosive_pass_%': 'Passes of 20+ yards',
@@ -960,6 +1012,22 @@ def team_table(row, stats):
     return f'<table><tr><th>Pregame team rates</th><th>{escape(row.away_team)}</th><th>{escape(row.home_team)}</th></tr>{"".join(rows)}</table>'
 
 
+@lru_cache(maxsize=8)
+def team_records(season, week):
+    """{team: '2-1'} as of kickoff -- every completed game earlier this season.
+    Ties get a third number, the way a record is actually written."""
+    sched = packet_schedule()
+    played = sched[(sched.season == season) & (sched.week < week)
+                   & sched.away_score.notna() & sched.home_score.notna()]
+    tally = {}
+    for game in played.itertuples():
+        for team, own, other in [(game.away_team, game.away_score, game.home_score),
+                                 (game.home_team, game.home_score, game.away_score)]:
+            record = tally.setdefault(team, [0, 0, 0])
+            record[0 if own > other else 1 if own < other else 2] += 1
+    return {team: f'{w}-{l}' + (f'-{t}' if t else '') for team, (w, l, t) in tally.items()}
+
+
 def game_header(row, market, action):
     def qb(side):
         name = row.get(f'{side}_qb_short')
@@ -974,9 +1042,13 @@ def game_header(row, market, action):
     fmt = '+.1f' if market == 'spread' else '.1f'
     values = [format(sign * row.market_base, fmt), format(sign * row.prediction, fmt),
               f'{abs(row.edge):.1f}', f'{np.sqrt(row.variance):.1f}']
-    headings = ['Away', 'MarketLine' if market == 'spread' else 'Market O/U',
-                'ModelLine' if market == 'spread' else 'Model O/U', 'Edge', 'SD', 'PICK', 'Home']
-    labels = ''.join(f'<div class="pick-label">{h}</div>' for h in headings)
+    headings = ['Market' if market == 'spread' else 'Market O/U',
+                'Model' if market == 'spread' else 'Model O/U', 'Edge', 'SD']
+    records = team_records(int(row.season), int(row.week)) if 'season' in row else {}
+
+    def badge(team):
+        record = records.get(team)
+        return f'<span class="record">({escape(record)})</span>' if record else ''
     if action == 'PASS':
         pick = '–'
     else:
@@ -991,11 +1063,18 @@ def game_header(row, market, action):
         label = 'Implied score:' if row.get('scores_implied', False) == True else 'Prediction:'
         scores = (f'<span class="score-label">{label}</span>'
                   f'<span class="score-value">{away} {row.away_points:.1f} - {row.home_points:.1f} {home}</span><span></span>')
-    return ('<header class="pick-header"><div class="pick-grid">' + labels
-            + f'<div class="pick-team">{logo(row.away_team)}{away}</div>'
-            + ''.join(f'<div class="pick-value">{v}</div>' for v in values)
-            + f'<div class="pick-value">{pick}</div>'
-            + f'<div class="pick-team home">{home}{logo(row.home_team)}</div>'
+    # Each number carries its own label directly above it, and the numbers sit
+    # in one group between the teams instead of being stretched across the
+    # full width by a grid row of their own.
+    cells = ''.join(f'<div class="pick-cell"><span class="pick-label">{escape(h)}</span>'
+                    f'<span class="pick-value">{v}</span></div>'
+                    for h, v in zip(headings, values))
+    cells += (f'<div class="pick-cell"><span class="pick-label">PICK</span>'
+              f'<span class="pick-value">{pick}</span></div>')
+    return ('<header class="pick-header"><div class="pick-grid">'
+            + f'<div class="pick-team">{logo(row.away_team)}{away}{badge(row.away_team)}</div>'
+            + f'<div class="pick-numbers">{cells}</div>'
+            + f'<div class="pick-team home">{badge(row.home_team)}{home}{logo(row.home_team)}</div>'
             + f'<div class="pick-qb">{qb("away")}</div><div class="pick-score">{scores}</div>'
             + f'<div class="pick-qb home">{qb("home")}</div></div></header>')
 

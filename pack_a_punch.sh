@@ -44,3 +44,10 @@ pack_a_punch() {
     if [ "$(uname)" = Darwin ]; then open "$saved"; fi
     return 0
 }
+
+# Sourced, this just defines the function. Executed directly (./pack_a_punch.sh)
+# it runs it, because that is what someone typing the filename meant. When a
+# file is sourced $0 is the shell; when it is executed $0 is the file.
+case "${0##*/}" in
+    pack_a_punch.sh) pack_a_punch "$@" ;;
+esac

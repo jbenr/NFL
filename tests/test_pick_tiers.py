@@ -105,6 +105,28 @@ class TierTests(unittest.TestCase):
         self.assertIsNone(wp.tier_band(.50))
 
 
+class StatFormatTests(unittest.TestCase):
+    def test_per_play_points_are_not_shown_as_percentages(self):
+        """EPA per play is points (0.153), not a share of plays. The '_pp'
+        suffix it shares with first downs and turnovers per play -- which
+        really are rates -- once turned it into '15.3%'."""
+        import re
+        stats = pd.DataFrame({'team': ['SF'], 'off_pass_epa_pp': [.153], 'off_run_epa_pp': [-.020],
+                              'off_first_down_pp': [.333], 'off_turnovers_pp': [.016],
+                              'off_pass_ypp': [6.6]})
+        cell = lambda metric: re.sub(r'<[^>]+>', '', wp.stat_cell(stats, 'SF', 'off', metric))
+        self.assertEqual(cell('pass_epa_pp'), '+0.153(#1)')
+        self.assertEqual(cell('run_epa_pp'), '-0.020(#1)')
+        self.assertEqual(cell('first_down_pp'), '33.3%(#1)')   # a real per-play rate
+        self.assertEqual(cell('turnovers_pp'), '1.6%(#1)')
+        self.assertEqual(cell('pass_ypp'), '6.6(#1)')
+
+    def test_every_points_metric_is_declared(self):
+        for metric in wp.POINTS_PER_PLAY:
+            self.assertTrue(metric.endswith('_pp'), metric)
+            self.assertNotIn('%', metric)
+
+
 class ProfileTests(unittest.TestCase):
     """Lookback, training window and stat preset belong to the model, not to
     the command line -- a bucket's hit rate was measured with specific ones."""
