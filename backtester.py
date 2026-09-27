@@ -649,11 +649,18 @@ def two_sided_season(args):
         'data_crunchski_2.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py',
         'data/sched.parquet', weather_file]).stem
     output = Path(args.output or f'data/bt/{output_root}/{season_label}/{fingerprint}')
-    print(f'{model_label}: {span_label}, {len(scheduled)} games\n'
-          f'  {calculation} / league z-scores / symmetric usage scaling / historical weather\n'
+    architecture = getattr(args, 'model', 'two-sided')
+    scoring = ('each side predicts the margin, the two are averaged (no total)' if objective == 'margin'
+               else 'each side predicts its own score, the spread is their difference')
+    print(f'{model_label} · {architecture}: {span_label}, {len(scheduled)} games\n'
+          f'  {scoring}\n'
+          f'  {calculation} stats / league z-scores / usage scaling applied to both teams\n'
           f'  feature lookback {args.lookback}; training window {args.train_window} REG weeks\n'
-          f'  {args.iterations} members, {args.prep_jobs} preparation / {args.jobs} training workers; pre-season warmup included\n'
-          f'  RETROSPECTIVE WEATHER EXPERIMENT — not pregame betting validation\n'
+          f'  {span} earlier weeks are loaded as training history only and never scored '
+          f'(no preseason exists in this data)\n'
+          f'  {args.iterations} members, {args.prep_jobs} preparation / {args.jobs} training workers\n'
+          f'  Weather is the observed reading at kickoff, not the pregame forecast the packet uses, so '
+          f'results are mildly optimistic wherever weather matters\n'
           f'  Output: {output}', flush=True)
     panel = dc3.attach_historical_weather(panel, weather_file)
     if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:   # Model 2.2's input
@@ -678,9 +685,19 @@ def two_sided_season(args):
         result = target.merge(details, on=['away_team', 'home_team'], validate='one_to_one')
         results.append(result)
         utils.save_parquet(result, output / f'{season}_wk{week:02d}.parquet')
-        shown = result[['away_team', 'home_team', 'away_points', 'home_points']].copy()
-        shown['away_spread'], shown['spread_sd'] = -result.prediction, np.sqrt(result.variance)
-        shown['total'], shown['total_sd'] = result.total_prediction, np.sqrt(result.total_variance)
+        # Only print what this objective actually forecasts. The margin
+        # objective has no scores and no total, so those columns were four
+        # of eight and every one of them NaN; what it does have is the two
+        # sides' own reads and how far apart they landed.
+        shown = result[['away_team', 'home_team']].copy()
+        if objective == 'margin':
+            shown['away_spread'] = -result.prediction
+            shown['from_away'], shown['from_home'] = -result.spread_from_away, -result.spread_from_home
+            shown['side_gap'], shown['spread_sd'] = result.side_gap, np.sqrt(result.variance)
+        else:
+            shown['away_points'], shown['home_points'] = result.away_points, result.home_points
+            shown['away_spread'], shown['spread_sd'] = -result.prediction, np.sqrt(result.variance)
+            shown['total'], shown['total_sd'] = result.total_prediction, np.sqrt(result.total_variance)
         print(shown.to_string(index=False, float_format=lambda v: f'{v:.1f}'), flush=True)
         if int(week) % 5 == 0:
             from joblib.externals.loky import get_reusable_executor

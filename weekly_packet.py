@@ -144,16 +144,18 @@ details.matchup{position:relative}
    The table itself isn't on the page -- picks_png() draws the picture from
    its HTML following these rules, so change both together. */
 .headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Graduate,Georgia,serif;width:100%}
-.headline-table-light th,.headline-table-light td{padding:2px 6px;border:1px solid #ddd;text-align:center;line-height:1.25;white-space:nowrap}
+.headline-table-light th,.headline-table-light td{padding:1px 5px;border:1px solid #ddd;text-align:center;line-height:1.15;white-space:nowrap}
 .headline-table-light th{background:#f2f2f2;font-weight:600}
 .headline-table-light img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
 /* Column order is fixed in headline_table() -- numeric columns (spread/
    model/diff/sd, both markets) right-align like a real figures column
    instead of sitting dead-center; logo/date/team/pick columns stay
-   centered. nth-child indices: 5,6=spread's line/model, 9,10=diff/sd,
-   12,13=total's line/model, 14,15=total's diff/sd. */
-.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(9),
-.headline-table-light td:nth-child(11),.headline-table-light td:nth-child(12),.headline-table-light td:nth-child(13){text-align:right}
+   centered. Column order (headline_table sets it explicitly): 1 kickoff,
+   2 away logo, 3 away, 4 away QB, 5 spread, 6 model, 7 home QB, 8 home,
+   9 home logo, 10 diff, 11 picks, 12 O/U, 13 model, 14 diff, 15 picks. */
+.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(10),
+.headline-table-light td:nth-child(12),.headline-table-light td:nth-child(13),
+.headline-table-light td:nth-child(14){text-align:right}
 main.headline-shell{overflow-x:auto}
 .context-row{margin:12px 0}.context-value{font-size:12px;line-height:1.35;overflow-wrap:anywhere;color:#ccc}
 .context-value:last-child{text-align:right}.matchup-head{font-size:15px}
@@ -205,7 +207,7 @@ main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
 @media(max-width:650px){.spec-list,.spec-list .spec-list{grid-template-columns:1fr;gap:2px}.spec-list dd{margin-bottom:8px}}
 .stats-table{background:#111;color:#e3e6e9;font:12px/1.25 Arial,sans-serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
 /* The headline sheet is all NFL font, headers and figures included. */
-.headline-table{background:#111;color:#e3e6e9;font:13px/1.25 Graduate,Georgia,serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
+.headline-table{background:#111;color:#e3e6e9;font:12px/1.15 Graduate,Georgia,serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
 .headline-table{width:100%}
 /* Stats tables size to their own content (3-6 columns of team/value data)
    instead of stretching full-width. */
@@ -222,7 +224,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
    (the logo's height) keeps text and logos lined up in every row. */
 .packet .stats-table td{line-height:20px}.stats-table td img{vertical-align:top}
 .stats-table tbody tr:hover td{background:#1d2126}
-.packet .headline-table th{padding:7px 8px}
+.packet .headline-table th{padding:4px 6px}
 /* Confidence key, bottom right under the sheet (tier_legend). */
 .model-credit{margin:10px 0 0;font:12px Arial,sans-serif;color:#b7c0c9;text-align:right}
 .tier-legend{display:flex;flex-direction:column;align-items:flex-end;gap:3px;margin:10px 0 0;font:11px Arial,sans-serif;color:#b7c0c9;text-align:right}
@@ -250,7 +252,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 @media(max-width:650px){.tier-table th:nth-child(6),.tier-table td:nth-child(6),
 .tier-table th:nth-child(7),.tier-table td:nth-child(7){display:none}.tier-guide summary{text-align:left}}
 .tier-warn{color:#ffd48a}
-.packet .headline-table td{padding:3px 8px}
+.packet .headline-table td{padding:1px 6px}
 /* Every stats table formatted the same tight way (this used to be QB
    Elo-only, leaving the others visibly looser/wider) -- small logos,
    snug padding, all of them. */
@@ -258,12 +260,18 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .packet .headline-table th,.packet .stats-table th{background:#1a1d21;color:#aeb8c3;border:0;border-bottom:2px solid #41464e;white-space:nowrap}
 .packet .headline-table td,.packet .stats-table td{border:0;border-bottom:1px solid #292d32;white-space:nowrap}
 .headline-table tbody tr:hover,.stats-table tbody tr:hover{background:#1d2126}
-.headline-table img{height:30px;width:34px;object-fit:contain;vertical-align:middle}
+.headline-table img{height:24px;width:26px;object-fit:contain;vertical-align:middle}
 .stats-table img{height:20px;width:22px;object-fit:contain;vertical-align:middle}
-.headline-table td:nth-child(4),.headline-table td:nth-child(7),
-.headline-table-light td:nth-child(4),.headline-table-light td:nth-child(7){font-family:Graduate,Georgia,serif;font-size:14px}
-.headline-table td:nth-child(5),.headline-table td:nth-child(6),.headline-table td:nth-child(9),
-.headline-table td:nth-child(11),.headline-table td:nth-child(12),.headline-table td:nth-child(13){text-align:right}
+.headline-table td:nth-child(3),.headline-table td:nth-child(8),
+.headline-table-light td:nth-child(3),.headline-table-light td:nth-child(8){font-family:Graduate,Georgia,serif;font-size:14px}
+.headline-table td:nth-child(5),.headline-table td:nth-child(6),.headline-table td:nth-child(10),
+.headline-table td:nth-child(12),.headline-table td:nth-child(13),.headline-table td:nth-child(14){text-align:right}
+/* The quarterbacks are reference, not numbers to compare -- small, quiet, and
+   leaning toward their own team. */
+.headline-table td:nth-child(4),.headline-table-light td:nth-child(4){text-align:left}
+.headline-table td:nth-child(7),.headline-table-light td:nth-child(7){text-align:right}
+.headline-table td:nth-child(4),.headline-table td:nth-child(7){font:11px Arial,sans-serif;color:#9ba8b5}
+.headline-table-light td:nth-child(4),.headline-table-light td:nth-child(7){font:10px Arial,sans-serif;color:#666}
 .stats-table .rank{font-size:10px;line-height:1;color:#aab2bc;margin-left:6px}
 .stats-table td:first-child,.stats-table th:first-child{text-align:left}
 .sort-radio{display:none}
@@ -321,7 +329,10 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 @media(max-width:650px){.pick-grid{gap:2px 6px}.pick-numbers{gap:8px}.pick-cell{min-width:38px}
  .pick-value{font-size:14px}.pick-team{font-size:18px;gap:4px}.pick-team .logo{width:38px;height:38px}
  .record{font-size:11px}.pick-qb{font-size:11px}}
-.pick-team{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font:24px Graduate,serif}.pick-team.home{justify-content:flex-end}.pick-team .logo{width:52px;height:52px}
+.pick-team{display:flex;flex-direction:column;align-items:flex-start;gap:1px;font:24px Graduate,serif}
+.pick-team.home{align-items:flex-end}
+.pick-team .identity{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.pick-team .logo{width:52px;height:52px}
 .pick-value{font-size:15px;font-weight:600}.pick-qb{font:12px Graduate,Georgia,serif;white-space:nowrap}
 .pick-score{grid-column:2;display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:baseline;font:12px Graduate,Georgia,serif;color:#9ba8b5}
 .pick-score .score-label{justify-self:end}.pick-score .score-value{color:#eee}
@@ -1072,9 +1083,11 @@ def game_header(row, market, action):
     cells += (f'<div class="pick-cell"><span class="pick-label">PICK</span>'
               f'<span class="pick-value">{pick}</span></div>')
     return ('<header class="pick-header"><div class="pick-grid">'
-            + f'<div class="pick-team">{logo(row.away_team)}{away}{badge(row.away_team)}</div>'
+            + f'<div class="pick-team"><span class="pick-label">Away</span>'
+              f'<span class="identity">{logo(row.away_team)}{away}{badge(row.away_team)}</span></div>'
             + f'<div class="pick-numbers">{cells}</div>'
-            + f'<div class="pick-team home">{badge(row.home_team)}{home}{logo(row.home_team)}</div>'
+            + f'<div class="pick-team home"><span class="pick-label">Home</span>'
+              f'<span class="identity">{badge(row.home_team)}{home}{logo(row.home_team)}</span></div>'
             + f'<div class="pick-qb">{qb("away")}</div><div class="pick-score">{scores}</div>'
             + f'<div class="pick-qb home">{qb("home")}</div></div></header>')
 
@@ -1743,10 +1756,23 @@ def headline_table(folder, light=False):
     games = base[['season', 'week', 'away_team', 'home_team']].merge(
         sched, on=['season', 'week', 'away_team', 'home_team'], how='left')
 
+    def quarterback(row, side):
+        """'J.Daniels 49.8' -- the scheduled starter and his rating going in.
+        The sheet has room for it since the SD column came out, and it is the
+        one thing a reader checks before trusting a number on this row."""
+        name = row.get(f'{side}_qb_short')
+        if pd.isna(name) or not str(name).strip():
+            name = row.get(f'{side}_qb_name')
+        elo = row.get(f'{side}_raw_off_qb_elo')
+        if pd.isna(name) or not str(name).strip():
+            return ''
+        return f'{name}' + (f' {elo:.0f}' if pd.notna(elo) else '')
+
     def market_fields(frame, g, market):
         match = frame[(frame.away_team == g.away_team) & (frame.home_team == g.home_team)] if frame is not None else None
         if match is None or match.empty:
-            return dict(line=np.nan, model=np.nan, diff=np.nan, sd=np.nan, tier=None, pick=''), None
+            return dict(line=np.nan, model=np.nan, diff=np.nan, sd=np.nan, tier=None, pick='',
+                    away_qb='', home_qb=''), None
         r = match.iloc[0]
         pick = (r.away_team if r.edge > 0 else r.home_team) if market == 'spread' else ('OVER' if r.edge > 0 else 'UNDER')
         pick = pick if bool(r.qualifies) else 'PASS'
@@ -1756,7 +1782,8 @@ def headline_table(folder, light=False):
         # Total has no team-perspective concept, so it's left alone.
         sign = -1 if market == 'spread' else 1
         return (dict(line=sign * r.market_base, model=sign * r.prediction, diff=abs(r.edge), sd=r.sd,
-                     market_line=r.market_base, tier=r.get('tier'), pick=pick),
+                     market_line=r.market_base, tier=r.get('tier'), pick=pick,
+                     away_qb=quarterback(r, 'away'), home_qb=quarterback(r, 'home')),
                 (pick if pick != 'PASS' else None))
 
     rows = []
@@ -1771,11 +1798,14 @@ def headline_table(folder, light=False):
         # then spread's own line/prediction, then home, then diff/sd/pick --
         # O/U's own total/total_prediction/diff/sd/pick block appended
         # after, team names not repeated for the second market.
+        # The spread frame carries the quarterbacks; the total frame is the
+        # same games, so either will do -- prefer whichever answered.
+        qbs = spread if spread.get('away_qb') else total
         rows.append(dict(
             gameday=g.gameday, gametime=g.gametime,
-            away_logo=g.away_team, away_team=g.away_team,
+            away_logo=g.away_team, away_team=g.away_team, away_qb=qbs.get('away_qb', ''),
             spread=spread['line'], prediction=spread['model'],
-            home_team=g.home_team, home_logo=g.home_team,
+            home_qb=qbs.get('home_qb', ''), home_team=g.home_team, home_logo=g.home_team,
             diff=spread['diff'], pick=spread['pick'],
             total=total['line'], total_prediction=total['model'],
             total_diff=total['diff'], total_pick=total['pick'],
@@ -1788,6 +1818,15 @@ def headline_table(folder, light=False):
     # Tiers ride along for the sort, then step out of the displayed frame.
     tiers = table[['spread_tier', 'total_tier']]
     table = table.drop(columns=['spread_tier', 'total_tier'])
+    # Date and time were two columns saying one thing; one kickoff column
+    # gives the width back to the numbers.
+    table['kickoff'] = [f"{day.strftime('%a %m/%d')} {time.strftime('%I:%M').lstrip('0')}" if time
+                        else day.strftime('%a %m/%d')
+                        for day, time in zip(table.gameday, table.gametime)]
+    table = table.drop(columns=['gameday', 'gametime'])
+    table = table[['kickoff', 'away_logo', 'away_team', 'away_qb', 'spread', 'prediction',
+                   'home_qb', 'home_team', 'home_logo', 'diff', 'pick',
+                   'total', 'total_prediction', 'total_diff', 'total_pick']]
 
     def signed(value, precision=1):
         return '—' if pd.isna(value) else f'{value:+.{precision}f}'
@@ -1845,15 +1884,13 @@ def headline_table(folder, light=False):
     if gradient_sd:
         styled = styled.background_gradient(subset=gradient_sd, cmap=reds)
     styled = (styled.format({
-                 'gameday': lambda x: x.strftime('%a %m/%d'),
-                 'gametime': lambda x: x.strftime('%I:%M %p').lstrip('0') if x else '—',
                  'spread': signed, 'prediction': signed, 'diff': plain,
                  'total': plain, 'total_prediction': plain, 'total_diff': plain,
                  'away_logo': lambda x: logo(x), 'home_logo': lambda x: logo(x),
                  'away_team': team_cell, 'home_team': team_cell,
              })
-             .relabel_index(['Date', 'Time', '', 'Away', 'Spread', 'Model', 'Home', '', 'Diff', 'Picks',
-                             'O/U', 'Model', 'Diff', 'Picks'], axis=1)
+             .relabel_index(['Kickoff', '', 'Away', 'QB', 'Spread', 'Model', 'QB', 'Home', '',
+                             'Diff', 'Picks', 'O/U', 'Model', 'Diff', 'Picks'], axis=1)
              .apply(tier_styles, axis=None))
     behind = {market: running_model(folder, market) for market in ['spread', 'total']}
     return styled.to_html() + model_credits(behind) + tier_legend() + tier_guide(behind)

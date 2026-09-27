@@ -230,14 +230,16 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
                               ['data_crunchski_3.py', 'model_shredski.py', 'modelo_workers.py'])
     importance_path = cached.with_suffix('.importance.parquet')
     if cached.exists() and importance_path.exists():
-        print(f'  {season} wk{week}: two-sided scores cached', flush=True)
+        print(f'  {season} wk{week}: {"sided-spread" if objective == "margin" else "two-sided"} '
+              'scores cached', flush=True)
         return pd.read_parquet(cached), pd.read_parquet(importance_path)
     n_features = len(target.attrs['model_features'])
     with parallel_config(backend='loky', n_jobs=min(jobs, iterations), inner_max_num_threads=1):
         runs = list(tqdm(Parallel(return_as='generator', initializer=initialize_worker)(
             delayed(fit_member)(i, x, y, xp, seed, epochs, n_features, len(target.attrs['context_names']))
             for i in range(iterations)),
-            total=iterations, desc=f'Two-sided scores ({season} wk{week})'))
+            total=iterations, desc=f'{"Sided-spread" if objective == "margin" else "Two-sided"} '
+                                   f'({season} wk{week})'))
     count = len(target)
     scores = np.stack([r[0] for r in runs]) + offset
     away, home = scores[:, :count], scores[:, count:]
@@ -288,10 +290,13 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
         if name.startswith('own_def_'):
             return f"away_def_{name[len('own_def_'):]}"
         return CONTEXT_LABELS.get(name, f'context_{name}')
+    explanations = {}
     for j, name in enumerate(names_all):
         feature = label(name)
-        result[f'attr_{feature}'] = share * (attrs[:count, j] - attrs[count:, j])
-        result[f'total_attr_{feature}'] = nowhere if margin_target else attrs[:count, j] + attrs[count:, j]
+        explanations[f'attr_{feature}'] = share * (attrs[:count, j] - attrs[count:, j])
+        explanations[f'total_attr_{feature}'] = (nowhere if margin_target
+                                                 else attrs[:count, j] + attrs[count:, j])
+    result = pd.concat([result, pd.DataFrame(explanations, index=result.index)], axis=1)
     result['integration_residual'] = result.prediction - result.baseline - result.filter(regex='^attr_').sum(axis=1)
     result['total_integration_residual'] = (nowhere if margin_target else
                                             result.total_prediction - result.total_baseline

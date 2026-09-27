@@ -73,7 +73,10 @@ def runs():
         # version id ('model-2.0') on a two-sided one, so normalize it rather
         # than trusting the field: the architecture is what decides which runs
         # a rule has to replicate on.
-        architecture = spec['model'] if spec.get('model') in ['shared', 'joint'] else 'two-sided'
+        # Newer runs record it outright; older ones put the architecture in
+        # 'model' for shared/joint and the version id for everything else.
+        architecture = spec.get('architecture') or (
+            spec['model'] if spec.get('model') in ['shared', 'joint'] else 'two-sided')
         family = spec.get('model_version', folder.parents[1].name)
         if architecture != 'two-sided':
             family += f'-{architecture}'
