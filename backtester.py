@@ -590,6 +590,12 @@ def two_sided_season(args):
     # score. The two estimates are then averaged instead of subtracted, which
     # cancels their errors rather than compounding them. It predicts no total.
     objective = 'margin' if getattr(args, 'model', 'two-sided') == 'sided-spread' else 'points'
+    shrink = getattr(args, 'roster_shrink', None)
+    if shrink is not None:
+        table = pd.read_parquet('data/roster/unit_retention.parquet')
+        dc3.use_roster_shrink(table, fade_weeks=shrink)
+        print(f'Roster shrinkage ON: stats discounted toward league average by unit turnover, '
+              f'fading out by week {shrink:g} ({len(table)} team-seasons)', flush=True)
     model_version = getattr(args, 'model_version', 'legacy')
     if model_version.startswith('model_'):
         import model_spec
@@ -626,6 +632,7 @@ def two_sided_season(args):
                   weather_source='historical_reanalysis', weather_file=str(weather_file),
                   weather_features=dc3.MODEL_WEATHER, metrics=list(dc3.METRICS), context=list(dc3.BASE_CONTEXT),
                   architecture=getattr(args, 'model', 'two-sided'), objective=objective,
+                  roster_shrink=shrink, only_weeks=getattr(args, 'only_weeks', None),
                   iterations=args.iterations,
                   epochs=args.epochs, seed=args.seed, status='RETROSPECTIVE — NOT PREGAME VALIDATION',
                   qb_decay='existing QB Elo decay unchanged')
@@ -671,6 +678,11 @@ def two_sided_season(args):
     results, importances = [], []
     evaluation = panel[(panel.season >= args.start_season) &
                        ((panel.season < args.season) | ((panel.season == args.season) & (panel.week <= end_week)))]
+    if getattr(args, 'only_weeks', None):
+        lo, hi = (int(x) for x in args.only_weeks.split('-'))
+        evaluation = evaluation[evaluation.week.between(lo, hi)]
+        scheduled = scheduled[scheduled.week.between(lo, hi)]
+        print(f'Scoring weeks {lo}-{hi} only: {len(evaluation)} games', flush=True)
     if set(evaluation.game_id) != set(scheduled.game_id):
         raise ValueError('Prepared evaluation games differ from the requested schedule')
     for (season, week), target in evaluation.groupby(['season', 'week'], sort=True):
@@ -745,7 +757,10 @@ if __name__ == '__main__':
     parser.add_argument('--calculation', choices=list(dc.DECAY_PRESETS), default=None,
                         help="Stat recency preset. Default: whatever the model version uses ('weighted' for "
                              "model_2.0, 'steep' for legacy). 'carryover' is 'weighted' with games from an "
-                             "earlier season counted half -- the September-staleness experiment.")
+                             "earlier season counted half -- the September-staleness experiment. 'solved' is "
+                             "the only one not chosen by hand: taper_solver.py fits it out of sample, and it "
+                             "weights games within a season equally while discounting last season by an "
+                             "amount that shrinks as this season accumulates games.")
     parser.add_argument('--lookback', type=int, default=20, help='Two-sided experiment stat lookback')
     parser.add_argument('--train-window', type=int, default=100, help='Two-sided experiment training REG weeks')
     parser.add_argument('--epochs', type=int, default=100)
@@ -772,6 +787,13 @@ if __name__ == '__main__':
     parser.add_argument('--decision-hours', type=float, default=24)
     parser.add_argument('--inputs', choices=['separate', 'differential'], default='differential',
                         help='How a team\'s offense and the opposing defense combine: kept apart or differenced')
+    parser.add_argument('--roster-shrink', nargs='?', const=6., type=float, default=None,
+                        metavar='FADE_WEEKS',
+                        help='Shrink carried-forward stats toward the league average in proportion to how '
+                             'much of the relevant unit left, fading out by FADE_WEEKS (default 6). Needs '
+                             'data/roster/unit_retention.parquet from roster_study.py.')
+    parser.add_argument('--only-weeks', metavar='LO-HI',
+                        help='Score only these weeks (e.g. 1-5). Training history is unaffected.')
     parser.add_argument('--normalize', choices=['raw', 'zscore', 'percentile'], default='raw',
                         help="What scale they are measured on. 'raw' is the per-team rate; 'zscore' and "
                              "'percentile' rank each team against that week's league first. Independent of "

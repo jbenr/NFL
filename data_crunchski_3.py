@@ -32,6 +32,73 @@ TRAVEL_CONTEXT = 'travel_advantage'
 TRAVEL_SCALE = 1000.
 
 
+# ---------------------------------------------------------- roster shrinkage
+# Which unit's turnover makes a metric untrustworthy. This map is asserted,
+# not derived: an attempt to derive it from stat persistence failed because
+# the units do not turn over independently (41% of their variance is one
+# common "this team is stable" factor), and the joint fit returned impossible
+# signs -- keeping your backs made rushing stats persist LESS. So it is a
+# judgement, written in one place to be argued with.
+#
+# The quarterback is deliberately absent: qb_elo already carries him, and
+# folding him in here would discount the one position the model handles well.
+METRIC_UNITS = {
+    'pass_ypp': 'receivers', 'pass_completion_%': 'receivers', 'explosive_pass_%': 'receivers',
+    'pass_epa_pp': 'receivers', 'pass_success_%': 'receivers',
+    'sack_%': 'oline', 'qb_hit_%': 'oline',
+    'run_ypp': 'backs', 'explosive_run_%': 'backs', 'run_epa_pp': 'backs',
+    'run_success_%': 'backs', 'stuff_%': 'oline',
+    'first_down_pp': 'receivers', 'series_success_%': 'receivers',
+    'third_down_%': 'receivers', 'fourth_down_%': 'receivers',
+    'turnovers_pp': 'receivers', 'penalties_pp': 'oline',
+}
+# A defensive input is trusted according to the defence that produced it.
+DEFENSIVE_UNITS = {'receivers': 'pass_def', 'oline': 'run_def', 'backs': 'run_def'}
+ROSTER_SHRINK = {}          # (season, team) -> {unit: retention}; empty = feature off
+SHRINK_FADE_WEEKS = 6.      # by when the current season's own games have taken over
+
+
+def use_roster_shrink(table=None, fade_weeks=6.):
+    """Shrink a team's carried-forward stats toward the league average in
+    proportion to how much of the relevant unit left.
+
+    The inputs are league z-scores, so the league average is exactly zero and
+    shrinking is a multiply: a team returning 60% of its receivers carries 60%
+    of its measured passing edge and 40% of nothing.
+
+    It fades with the season. In week 1 every stat is last year's and the full
+    discount applies; by `fade_weeks` the lookback is mostly games this roster
+    actually played, so there is nothing stale to discount. Pass None to turn
+    it off."""
+    global ROSTER_SHRINK, SHRINK_FADE_WEEKS
+    SHRINK_FADE_WEEKS = float(fade_weeks)
+    if table is None:
+        ROSTER_SHRINK = {}
+        return {}
+    ROSTER_SHRINK = {(int(r.season), r.team): {u: getattr(r, u) for u in
+                                               ['receivers', 'backs', 'oline', 'pass_def', 'run_def']}
+                     for r in table.itertuples()}
+    return ROSTER_SHRINK
+
+
+def shrink_factor(season, team, metric, unit_side, week):
+    """How much of this team's measured edge in `metric` to keep."""
+    if not ROSTER_SHRINK:
+        return 1.
+    units = ROSTER_SHRINK.get((int(season), team))
+    if units is None:
+        return 1.
+    unit = METRIC_UNITS.get(metric, 'receivers')
+    if unit_side == 'def':
+        unit = DEFENSIVE_UNITS.get(unit, 'pass_def')
+    retention = units.get(unit)
+    if retention is None or not np.isfinite(retention):
+        return 1.
+    # Full discount in week 1, none once the current season has taken over.
+    stale = max(0., 1. - (float(week) - 1.) / SHRINK_FADE_WEEKS)
+    return 1. - (1. - float(retention)) * stale
+
+
 def use_travel(enabled=True):
     """Add (or drop) the travel input in the shared BASE_CONTEXT list, in
     place, so every module that imported it sees the same set."""
@@ -109,6 +176,14 @@ def two_sided_rows(games):
                 own_def = own_def * (games[f'{opponent}_raw_off_{usage}_%'].to_numpy() + .5)
             values[f'own_off_{metric}'] = own_off
             values[f'own_def_{metric}'] = own_def
+        if ROSTER_SHRINK:
+            # Same treatment for both rows, each against its own roster.
+            for metric in METRICS:
+                for unit_side in ['off', 'def']:
+                    owner = games[f'{side}_team'] if unit_side == 'off' else games[f'{opponent}_team']
+                    factor = np.array([shrink_factor(s, t, metric, unit_side, w)
+                                       for s, t, w in zip(games.season, owner, games.week)])
+                    values[f'own_{unit_side}_{metric}'] = values[f'own_{unit_side}_{metric}'] * factor
         for column in MODEL_WEATHER:
             values['weather_' + column] = games[column].to_numpy()
         values['home_field'] = games.home_field_adv.to_numpy() if side == 'home' else np.zeros(len(games))

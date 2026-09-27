@@ -1,6 +1,7 @@
 import pandas as pd
 import pyarrow.parquet as pq
 import numpy as np
+from pathlib import Path
 import utils
 # from opt_einsum.blas import tensor_blas
 from tabulate import tabulate, tabulate_formats
@@ -211,6 +212,14 @@ DECAY_PRESETS = {
     # and days-since decay can't tell them apart. Floored so a meaningless
     # game counts a little rather than nothing.
     'importance': dict(total_season_days=160, steepness=3, floor_weight=0.05),
+    # 'solved': not a hand-drawn curve at all. taper_solver.py fits, out of
+    # sample, what actually predicts a team's next game -- and the answer is
+    # that games within a season should count EQUALLY (the fitted per-lag
+    # weights come out flat: 0.05, 0.03, 0.04, 0.04...), while last season's
+    # games count a fraction of this season's, a fraction that shrinks as
+    # this season accumulates evidence. So there is no days-since decay
+    # here: the only moving part is SOLVED_PRIOR_RATIO below.
+    'solved': dict(total_season_days=160, steepness=0, floor_weight=1.0),
 }
 # Extra multiplier applied to games from before the newest season in the
 # window, per calculation preset (1.0 = no season boundary effect).
@@ -363,6 +372,39 @@ def _ratios_from_ingredients(ing, side):
     return out
 
 
+# What ONE game from last season is worth against ONE game from this
+# season, under the 'solved' preset. Fitted by taper_solver.py: predict a
+# team's next game from everything before it, out of sample, 2011-2025.
+#
+# The production 'weighted' curve puts last season at its 0.05 floor by
+# September, which is roughly a tenth of what it is worth. Correcting that
+# is the whole of this preset -- early-season holdout R2 goes 0.0121 ->
+# 0.0198, and in 2016-2020 the floored version is actually NEGATIVE
+# (-0.0024), i.e. worse than predicting the league average outright.
+#
+# A single constant, not a per-week schedule: the per-week solved values
+# wobble (0.67, 0.34, 0.44, 0.40 ...) on samples where the in-season block
+# holds a few percent of the weight, and out of sample the constant scored
+# BETTER than the per-week fit (0.0220 vs 0.0209 over games 2-12). The
+# objective is flat from about 0.35 to 0.6 in every era tested, so the
+# exact value is not load-bearing; the order of magnitude is. 0.40 rather
+# than the full-sample argmax because the two halves of the record pull
+# opposite ways (2011-2017 wants 0.5, 2018-2025 wants 0.3) and 0.40 is
+# within 0.0002 R2 of the best in both.
+SOLVED_PRIOR_RATIO = 0.40
+
+
+def _season_of(frame, dates):
+    """The season each game belongs to. nflverse game ids start with it
+    ('2024_05_KC_NO'), so the boundary is exact; ids that don't carry one
+    (synthetic frames) fall back to the date, a season running September
+    through February."""
+    seasons = pd.to_numeric(frame['game_id'].astype(str).str.slice(0, 4), errors='coerce')
+    if seasons.isna().any():
+        seasons = seasons.fillna(dates.dt.year - (dates.dt.month < 3).astype(int))
+    return seasons.to_numpy()
+
+
 def _pool_ingredients(ingredients, game_dates, calculation):
     """Sum a per-(game_id, team) ingredients table (see
     _per_game_ingredients) across games into one row per team. 'mean':
@@ -378,6 +420,11 @@ def _pool_ingredients(ingredients, game_dates, calculation):
     frame = ingredients.reset_index()
     if calculation == 'mean':
         weight = 1.0
+    elif calculation == 'solved':
+        dates = frame['game_id'].map(game_dates)
+        seasons = _season_of(frame, dates)
+        current = seasons == seasons.max()
+        weight = np.where(current, 1., SOLVED_PRIOR_RATIO)
     else:
         dates = frame['game_id'].map(game_dates)
         days_from_max = (dates.max() - dates).dt.days.to_numpy()
@@ -392,13 +439,7 @@ def _pool_ingredients(ingredients, game_dates, calculation):
             weight = weight * np.clip(leverage, leverage_rule['floor'], None)
         prior_season = PRIOR_SEASON_WEIGHT.get(calculation, 1.0)
         if prior_season != 1.0:
-            # nflverse game ids start with the season ('2024_05_KC_NO'), so the
-            # boundary is exact. Ids that don't carry one (synthetic frames)
-            # fall back to the date: a season runs September through February.
-            seasons = pd.to_numeric(frame['game_id'].astype(str).str.slice(0, 4), errors='coerce')
-            if seasons.isna().any():
-                seasons = seasons.fillna(dates.dt.year - (dates.dt.month < 3).astype(int))
-            seasons = seasons.to_numpy()
+            seasons = _season_of(frame, dates)
             weight = np.where(seasons < seasons.max(), weight * prior_season, weight)
     result = ingredients.mul(weight, axis=0).groupby(frame['team'].to_numpy()).sum()
     result.index.name = 'team'
