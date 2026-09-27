@@ -64,48 +64,89 @@ def hit_rate(edge, outcome, threshold):
     return float(right.mean()), int(live.sum())
 
 
-def report(left, right, names, thresholds=(0., 1., 2., 3., 4., 5., 6., 7.)):
-    shared = set(left.game_id) & set(right.game_id)
-    left = left[left.game_id.isin(shared)].sort_values('game_id').reset_index(drop=True)
-    right = right[right.game_id.isin(shared)].sort_values('game_id').reset_index(drop=True)
-    print(f'{len(shared)} games scored by both arms, '
-          f'{left.season.min():.0f}-{left.season.max():.0f} weeks '
-          f'{left.week.min():.0f}-{left.week.max():.0f}\n')
+def common_games(runs):
+    """Restrict every run to the games all of them scored.
 
+    Two runs that stopped at different weeks would otherwise be compared
+    on different football, and the gap would be the schedule rather than
+    the model."""
+    shared = set.intersection(*(set(frame.game_id) for frame in runs.values()))
+    return {name: frame[frame.game_id.isin(shared)].sort_values('game_id').reset_index(drop=True)
+            for name, frame in runs.items()}, shared
+
+
+def accuracy(runs):
+    rows = []
+    for name, frame in runs.items():
+        rows.append(dict(
+            run=name,
+            spread_mae=float((frame.prediction - frame.margin).abs().mean()),
+            total_mae=float((frame.total_prediction - frame.points).abs().mean()),
+            spread_ic=float(frame.prediction.corr(frame.margin)),
+            total_ic=float(frame.total_prediction.corr(frame.points))))
+    return pd.DataFrame(rows)
+
+
+def market_table(runs, edge, outcome, thresholds):
+    """Hit rate at each absolute-edge cut: [{threshold, {run: (rate, n)}}].
+
+    Plain rows rather than a DataFrame -- run names become column labels
+    here, and anything with a space in it stops being reachable once
+    pandas turns the row into a namedtuple."""
+    return [dict(threshold=threshold,
+                 cells={name: hit_rate(frame[edge].to_numpy(), frame[outcome].to_numpy(), threshold)
+                        for name, frame in runs.items()})
+            for threshold in thresholds]
+
+
+def report(runs, thresholds=(0., 1., 2., 3., 4., 5., 6., 7.)):
+    """Score any number of runs against each other on their shared games."""
+    runs, shared = common_games(runs)
+    any_frame = next(iter(runs.values()))
+    print(f'{len(shared)} games scored by all {len(runs)} runs, '
+          f'{any_frame.season.min():.0f}-{any_frame.season.max():.0f} weeks '
+          f'{any_frame.week.min():.0f}-{any_frame.week.max():.0f}\n')
+
+    names = list(runs)
+    width = max(len(n) for n in names) + 2
     print('ACCURACY')
-    print(f"{'':>12} {'spread MAE':>11} {'total MAE':>10} {'spread IC':>10} {'total IC':>9}")
-    for frame, name in ((left, names[0]), (right, names[1])):
-        smae = float((frame.prediction - frame.margin).abs().mean())
-        tmae = float((frame.total_prediction - frame.points).abs().mean())
-        sic = float(frame.prediction.corr(frame.margin))
-        tic = float(frame.total_prediction.corr(frame.points))
-        print(f'{name:>12} {smae:>11.3f} {tmae:>10.3f} {sic:>10.3f} {tic:>9.3f}')
+    print(f"{'':>{width}} {'spread MAE':>11} {'total MAE':>10} {'spread IC':>10} {'total IC':>9}")
+    for row in accuracy(runs).itertuples():
+        print(f'{row.run:>{width}} {row.spread_mae:>11.3f} {row.total_mae:>10.3f} '
+              f'{row.spread_ic:>10.3f} {row.total_ic:>9.3f}')
 
     for market, edge, outcome in (('SPREAD', 'spread_edge', 'away_covered'),
                                   ('TOTAL', 'total_edge', 'total_over')):
-        if edge not in left.columns:
+        if edge not in any_frame.columns:
             continue
-        print(f'\n{market} PICKS BY EDGE')
-        print(f"{'edge >=':>8} " + ' '.join(f'{n:>16}' for n in names) + '   delta')
-        for threshold in thresholds:
-            a, na = hit_rate(left[edge].to_numpy(), left[outcome].to_numpy(), threshold)
-            b, nb = hit_rate(right[edge].to_numpy(), right[outcome].to_numpy(), threshold)
-            if not (na or nb):
-                continue
-            gap = f'{(b - a) * 100:+.1f}' if np.isfinite(a) and np.isfinite(b) else ''
+        print(f'\n{market} PICKS BY EDGE   (hit rate, n)')
+        print(f"{'edge >=':>8} " + ' '.join(f'{n:>16}' for n in names))
+        table = market_table(runs, edge, outcome, thresholds)
+        for row in table:
             cells = [f'{rate:>9.1%} ({count:>4})' if np.isfinite(rate) else f'{"-":>16}'
-                     for rate, count in ((a, na), (b, nb))]
-            print(f'{threshold:>8.0f} ' + ' '.join(cells) + f'   {gap:>6}')
+                     for rate, count in (row['cells'][name] for name in names)]
+            print(f"{row['threshold']:>8.0f} " + ' '.join(cells))
+        # Ranked on the cut the tier buckets actually use, and only where
+        # there is enough volume for the number to mean anything.
+        at_four = next((r for r in table if r['threshold'] == 4.), None)
+        if at_four:
+            ranked = sorted(((rate, count, name) for name, (rate, count) in at_four['cells'].items()
+                             if np.isfinite(rate) and count >= 100), reverse=True)
+            if ranked:
+                print('  at edge>=4: ' + ', '.join(f'{n} {r:.1%} ({c})' for r, c, n in ranked))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('left')
-    parser.add_argument('right')
-    parser.add_argument('--names', nargs=2, default=['left', 'right'])
+    parser.add_argument('folders', nargs='+', help='one or more backtest run directories')
+    parser.add_argument('--names', nargs='+', default=None,
+                        help='a label per folder (defaults to the folder name)')
     args = parser.parse_args()
-    report(graded(load(args.left)), graded(load(args.right)), args.names)
+    names = args.names or [Path(f).name[:10] for f in args.folders]
+    if len(names) != len(args.folders):
+        raise SystemExit(f'{len(names)} names for {len(args.folders)} folders')
+    report({name: graded(load(folder)) for name, folder in zip(names, args.folders)})
 
 
 if __name__ == '__main__':

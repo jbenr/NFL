@@ -656,6 +656,13 @@ def two_sided_season(args):
         'data_crunchski_2.py', 'shared_scoring.py', 'model_shredski.py', 'modelo_workers.py',
         'data/sched.parquet', weather_file]).stem
     output = Path(args.output or f'data/bt/{output_root}/{season_label}/{fingerprint}')
+    # The folder is a hash of the settings, so the only honest way for a
+    # caller to know it is to be told. Recorded on args as well as in the
+    # config, because a finished run returns its report rather than its
+    # config and a sweep still needs to say where each arm landed. Set
+    # after the fingerprint is taken, so it cannot feed back into the hash.
+    config['output'] = str(output)
+    args.output = str(output)
     architecture = getattr(args, 'model', 'two-sided')
     scoring = ('each side predicts the margin, the two are averaged (no total)' if objective == 'margin'
                else 'each side predicts its own score, the spread is their difference')
@@ -743,26 +750,31 @@ def configure_workers(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--model', choices=['shared', 'joint', 'two-sided', 'sided-spread'], default='shared',
+    parser.add_argument('--model', nargs='+', choices=['shared', 'joint', 'two-sided', 'sided-spread'], default='shared',
                         help="Architecture. 'two-sided' scores each team and subtracts; 'sided-spread' asks "
                              'each side for the margin directly and averages, which halves the spread\'s '
                              'variance but forecasts no total.')
     import model_spec
-    parser.add_argument('--model-version', choices=['legacy'] + [f'model_{v}' for v in model_spec.VERSIONS],
+    parser.add_argument('--model-version', nargs='+',
+                        choices=['legacy'] + [f'model_{v}' for v in model_spec.VERSIONS],
                         default='legacy',
                         help='Which input set to run: legacy (each architecture\'s original settings) or a '
                              'Model 2.x version -- 2.1 adds EPA, 2.2 adds travel distance. Works with every '
                              '--model; a versioned shared/joint run also honours --lookback, --calculation '
                              'and --train-window instead of their old hardcoded values.')
-    parser.add_argument('--calculation', choices=list(dc.DECAY_PRESETS), default=None,
+    parser.add_argument('--calculation', nargs='+',
+                        # 'mean' and 'median' are not decay curves, so they are not in
+                        # DECAY_PRESETS -- but calc_stats has always accepted them and
+                        # 'mean' is the flat baseline the curves are judged against.
+                        choices=['mean', 'median', *dc.DECAY_PRESETS], default=None,
                         help="Stat recency preset. Default: whatever the model version uses ('weighted' for "
                              "model_2.0, 'steep' for legacy). 'carryover' is 'weighted' with games from an "
                              "earlier season counted half -- the September-staleness experiment. 'solved' is "
                              "the only one not chosen by hand: taper_solver.py fits it out of sample, and it "
                              "weights games within a season equally while discounting last season by an "
                              "amount that shrinks as this season accumulates games.")
-    parser.add_argument('--lookback', type=int, default=20, help='Two-sided experiment stat lookback')
-    parser.add_argument('--train-window', type=int, default=100, help='Two-sided experiment training REG weeks')
+    parser.add_argument('--lookback', nargs='+', type=int, default=20, help='Two-sided experiment stat lookback')
+    parser.add_argument('--train-window', nargs='+', type=int, default=100, help='Two-sided experiment training REG weeks')
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--plan', action='store_true', help='Print two-sided experiment settings without training')
     parser.add_argument('--season', type=int, default=2025)
@@ -785,7 +797,7 @@ if __name__ == '__main__':
     parser.add_argument('--weather-source', choices=['forecast', 'recorded'], default='forecast')
     parser.add_argument('--weather-file')
     parser.add_argument('--decision-hours', type=float, default=24)
-    parser.add_argument('--inputs', choices=['separate', 'differential'], default='differential',
+    parser.add_argument('--inputs', nargs='+', choices=['separate', 'differential'], default='differential',
                         help='How a team\'s offense and the opposing defense combine: kept apart or differenced')
     parser.add_argument('--roster-shrink', nargs='?', const=6., type=float, default=None,
                         metavar='FADE_WEEKS',
@@ -794,12 +806,51 @@ if __name__ == '__main__':
                              'data/roster/unit_retention.parquet from roster_study.py.')
     parser.add_argument('--only-weeks', metavar='LO-HI',
                         help='Score only these weeks (e.g. 1-5). Training history is unaffected.')
-    parser.add_argument('--normalize', choices=['raw', 'zscore', 'percentile'], default='raw',
+    parser.add_argument('--normalize', nargs='+', choices=['raw', 'zscore', 'percentile'], default='raw',
                         help="What scale they are measured on. 'raw' is the per-team rate; 'zscore' and "
                              "'percentile' rank each team against that week's league first. Independent of "
                              "--inputs: separate+zscore is what the two-sided production model uses.")
     parser.add_argument('--output')
-    args = parser.parse_args()
+# Options that define WHICH model a run is, as opposed to how it is
+# executed. Each takes a list, and the backtester walks every combination
+# they make -- one sweep, one process, so the runs share a warm feature
+# cache instead of each paying for it again.
+SWEEPABLE = ['model', 'model_version', 'calculation', 'lookback', 'train_window', 'inputs', 'normalize']
+
+
+def combinations(args):
+    """Every run the command line asked for, most-varying option last.
+
+    An option given once is a list of one, so the ordinary single-run
+    command produces exactly one Namespace and behaves as it always did."""
+    import copy
+    import itertools
+    choices = [(name, value if isinstance(value, list) else [value])
+               for name, value in ((n, getattr(args, n)) for n in SWEEPABLE)]
+    runs = []
+    for picked in itertools.product(*(values for _, values in choices)):
+        run = copy.deepcopy(args)
+        for (name, _), value in zip(choices, picked):
+            setattr(run, name, value)
+        runs.append(run)
+    return runs
+
+
+def describe(run, against):
+    """What makes this run different from the others in the sweep."""
+    varying = [name for name in SWEEPABLE
+               if len({getattr(other, name) for other in against}) > 1]
+    return ', '.join(f'{name.replace("_", "-")} {getattr(run, name)}'
+                     for name in varying) or 'single run'
+
+
+def run_one(args, parser):
+    """Validate one configuration and run it.
+
+    Two-sided and sided-spread do their whole walk-forward in the branch
+    below and return; the older shared/joint architectures fall through
+    to compare(). Either way this returns rather than exiting, so a sweep
+    of several configurations survives past its first one."""
     try:
         configure_workers(args)
     except ValueError as error:
@@ -829,7 +880,9 @@ if __name__ == '__main__':
             parser.error(str(error))
         if args.plan:   # --plan returns the settings instead of training; show them
             print(json.dumps(plan, indent=2, default=str))
-        raise SystemExit(0)
+        # Return rather than exit: this is one configuration, and a sweep
+        # has more of them behind it.
+        return args.output
     if args.plan:
         parser.error('--plan is currently supported for --model two-sided/sided-spread only')
     if args.model_version != 'legacy':
@@ -870,3 +923,30 @@ if __name__ == '__main__':
         parser.error('Require start-season < validation-season <= season')
     args.groups = list(dict.fromkeys(args.groups))
     compare(args)
+    return args.output
+
+
+if __name__ == '__main__':
+    sweep = combinations(parser.parse_args())
+    if len(sweep) > 1 and sweep[0].output:
+        parser.error('--output names one directory, but this is a sweep of '
+                     f'{len(sweep)} runs; drop it and each run gets its own')
+    done = []
+    for number, run in enumerate(sweep, 1):
+        if len(sweep) > 1:
+            print(f'\n{"=" * 78}\n[{number}/{len(sweep)}] {describe(run, sweep)}\n{"=" * 78}', flush=True)
+        try:
+            done.append((describe(run, sweep), run_one(run, parser), None))
+        except Exception as failure:          # one bad combination must not
+            if len(sweep) == 1:               # lose the rest of the sweep
+                raise
+            print(f'  FAILED: {type(failure).__name__}: {failure}', flush=True)
+            done.append((describe(run, sweep), None, failure))
+    if len(sweep) > 1:
+        print(f'\n{"=" * 78}\nSWEEP OF {len(sweep)} RUNS\n{"=" * 78}')
+        for label, output, failure in done:
+            print(f'  {"FAILED " if failure else "ok     "}{label:<52} {output or ""}')
+        good = [output for _, output, failure in done if not failure and output]
+        if len(good) > 1:
+            print('\nScore them against each other on their shared games:')
+            print('  python compare_arms.py ' + ' '.join(good))

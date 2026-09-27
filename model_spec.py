@@ -83,9 +83,23 @@ PROFILES = {
                                  lookback=20, train_window=100, calculation='weighted'),
     'Model 2.1 · shared': dict(version='2.1', architecture='shared', inputs='differential',
                                lookback=20, train_window=100, calculation='weighted'),
+    # Same network and inputs as the default -- only the stat recency preset
+    # differs. 'solved' prices a prior-season game at 0.40 of a current one
+    # instead of the decay curve's 0.05 floor, which is what taper_solver.py
+    # fits out of sample. It owns early-season spreads and nothing else: on
+    # weeks 1-5 it lifts spread IC from 0.239 to 0.292, and on totals it is
+    # worse (high-edge totals fall from 54-57% to 48-49%), so the default
+    # keeps that market.
+    'Model 2.0 · solved': dict(version='2.0', architecture='two-sided', inputs=None,
+                               lookback=20, train_window=100, calculation='solved'),
 }
 DEFAULT_PROFILE = 'Model 2.0 · weighted'
 SHARED_PROFILE = 'Model 2.1 · shared'
+SOLVED_PROFILE = 'Model 2.0 · solved'
+# Weeks the solved preset owns the spread. Measured on 2013-2025 weeks 1-5;
+# weeks 6-12 are still being backtested, so the window stops where the
+# evidence does rather than where the hunch does.
+SOLVED_SPREAD_WEEKS = range(1, 6)
 # Where each profile's measured edge is. The shared architecture is 54.9% on
 # weeks 1-12 spreads and 49.6% from week 13 (43.0% in weeks 13-14, which is
 # the two-sided model's best window), so they split the season rather than
@@ -111,7 +125,13 @@ def owner(market, week):
     a near-constant predictor rather than a matchup read (see
     weekly_packet.SHARED_MODEL). The split machinery stays because it is the
     right shape the moment a second profile earns a bucket: put it back by
-    returning SHARED_PROFILE here for the weeks it owns."""
+    returning SHARED_PROFILE here for the weeks it owns.
+
+    Early-season spreads now go to SOLVED_PROFILE, which is the same model
+    with the recency taper fixed -- the first thing to beat the market on a
+    spread before week 13."""
+    if market == 'spread' and int(week) in SOLVED_SPREAD_WEEKS:
+        return SOLVED_PROFILE
     return DEFAULT_PROFILE
 
 

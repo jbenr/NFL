@@ -220,13 +220,33 @@ DECAY_PRESETS = {
     # this season accumulates evidence. So there is no days-since decay
     # here: the only moving part is SOLVED_PRIOR_RATIO below.
     'solved': dict(total_season_days=160, steepness=0, floor_weight=1.0),
+    # 'gradual': a mild, honest taper -- the middle ground between 'mean'
+    # (every game alike) and 'weighted' (a September game at the 0.05
+    # floor). Within a season it slides from 1.00 to about 0.51, and
+    # anything older sits on a 0.35 floor, which is close to the 0.40 that
+    # taper_solver fits for a prior-season game. One shape, two numbers,
+    # nothing tuned per week -- less to overfit than 'solved' and far less
+    # than 'steep'.
+    'gradual': dict(total_season_days=160, steepness=1, floor_weight=0.35),
+    # 'pure_importance': how much the game MATTERED to that team, and
+    # nothing else -- no days-since decay, no season boundary. The existing
+    # 'importance' preset multiplies leverage into the 'carryover' curve,
+    # so recency does most of the work and leverage only nudges it; this
+    # one asks the question on its own. Expect it to lean on last
+    # season's December rather than this season's September, which is
+    # precisely the bet being tested.
+    'pure_importance': dict(total_season_days=160, steepness=0, floor_weight=1.0),
 }
 # Extra multiplier applied to games from before the newest season in the
 # window, per calculation preset (1.0 = no season boundary effect).
 PRIOR_SEASON_WEIGHT = {'carryover': 0.5, 'importance': 0.5}
 # Presets that also scale each game by its playoff leverage for that team.
 # floor: the least a game can count, so a zero-leverage game isn't discarded.
-IMPORTANCE_WEIGHT = {'importance': dict(floor=0.05)}
+IMPORTANCE_WEIGHT = {'importance': dict(floor=0.05),
+                     # Gentler than 'importance': leverage is the only
+                     # thing weighting these games, so a dead-rubber game
+                     # should count for little, not almost nothing.
+                     'pure_importance': dict(floor=0.10)}
 # (game_id, team) -> leverage, filled in per process by _init_worker.
 GAME_IMPORTANCE = {}
 

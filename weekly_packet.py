@@ -14,40 +14,40 @@ import model_spec
 
 
 STYLE = '''
-body{font:15px/1.5 system-ui,sans-serif;color:#203039;background:#f1f3f1;margin:0}
-main{max-width:1050px;margin:auto;padding:40px 24px}h1,h2,h3{font-weight:600;line-height:1.2}
-h1{font-size:34px;margin:8px 0}h2{font-size:24px}h3{font-size:17px}.eyebrow{letter-spacing:2px;text-transform:uppercase;font-size:12px;color:#64796f}
-.muted,small{color:#63716d}.card{background:white;border:1px solid #dce3dd;border-radius:10px;padding:25px;margin:22px 0;break-inside:avoid}
-.teams{display:flex;align-items:center;gap:15px}.logo{width:52px;height:52px;object-fit:contain}.metrics{display:flex;flex-wrap:wrap;gap:30px;margin:20px 0}.metric strong{display:block;font-size:25px;font-weight:550}
+body{font:15px/1.42 system-ui,sans-serif;color:#203039;background:#f1f3f1;margin:0}
+main{max-width:1050px;margin:auto;padding:22px 20px}h1,h2,h3{font-weight:600;line-height:1.2}
+h1{font-size:34px;margin:4px 0 2px}h2{font-size:24px}h3{font-size:17px}.eyebrow{letter-spacing:2px;text-transform:uppercase;font-size:12px;color:#64796f}
+.muted,small{color:#63716d}.card{background:white;border:1px solid #dce3dd;border-radius:10px;padding:16px 18px;margin:12px 0;break-inside:avoid}
+.teams{display:flex;align-items:center;gap:15px}.logo{width:52px;height:52px;object-fit:contain}.metrics{display:flex;flex-wrap:wrap;gap:20px;margin:10px 0}.metric strong{display:block;font-size:25px;font-weight:550}
 .pill{display:inline-block;background:#edf1ec;border-radius:4px;padding:4px 9px;font-size:12px;font-weight:600}.warn{border-left:3px solid #b18b4f;padding:10px 16px;background:#faf7f0}
-table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:8px 10px;text-align:right;border-bottom:1px solid #edf0ed}td:first-child,th:first-child{text-align:left}a{color:#236950}
-.columns{display:grid;grid-template-columns:1.2fr 1fr;gap:28px}.barrow{display:grid;grid-template-columns:180px 1fr 55px;align-items:center;gap:8px;font-size:12px;margin:7px 0}.track{position:relative;height:12px;background:linear-gradient(90deg,#f7f4ef 50%,#eef4f0 50%)}.bar{position:absolute;height:12px;background:#30765d}.negative{background:#b17f51}.value{text-align:right;font-variant-numeric:tabular-nums}
+table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:4px 8px;text-align:right;border-bottom:1px solid #edf0ed}td:first-child,th:first-child{text-align:left}a{color:#236950}
+.columns{display:grid;grid-template-columns:1.2fr 1fr;gap:20px}.barrow{display:grid;grid-template-columns:180px 1fr 55px;align-items:center;gap:8px;font-size:12px;margin:4px 0}.track{position:relative;height:12px;background:linear-gradient(90deg,#f7f4ef 50%,#eef4f0 50%)}.bar{position:absolute;height:12px;background:#30765d}.negative{background:#b17f51}.value{text-align:right;font-variant-numeric:tabular-nums}
 /* Full feature list, not just the top 12 -- scrolls in place instead of
    turning the whole page into one long bar chart. */
 .importance-scroll{max-height:480px;overflow-y:auto;padding-right:6px;border:1px solid #ffffff12;border-radius:6px}
 .importance-scroll .barrow{margin:7px 10px}
-@media(max-width:760px){.columns{grid-template-columns:1fr}.barrow{grid-template-columns:145px 1fr 45px}main{padding:20px 12px}}
+@media(max-width:760px){.columns{grid-template-columns:1fr}.barrow{grid-template-columns:145px 1fr 45px}main{padding:12px 10px}}
 @media print{body{background:white}main{padding:0}.card{border-radius:0;page-break-inside:avoid}a{color:inherit}.no-print{display:none}}
 '''
 
 STYLE += '''
 body{font-family:Arial,sans-serif;background:white;color:#222}
-main{max-width:1150px;padding:24px}h1{font-size:26px}h2{font-size:21px}
-.card{border:2px solid #aaa;border-radius:0;padding:20px;margin:20px 0}
-td,th{border:1px solid #bbb;padding:9px 12px}th{background:#eee}
+main{max-width:1150px;padding:16px}h1{font-size:26px}h2{font-size:21px}
+.card{border:2px solid #aaa;border-radius:0;padding:14px;margin:12px 0}
+td,th{border:1px solid #bbb;padding:5px 9px}th{background:#eee}
 .pill{border-radius:0}.eyebrow{letter-spacing:0}.columns{display:block}
 .rank{color:#666;font-size:12px;margin-left:8px}.contribution{position:relative;height:26px;background:linear-gradient(90deg,#f5eee6 50%,#edf4ef 50%)}
 .contribution:after{content:"";position:absolute;left:50%;height:100%;border-left:1px solid #aaa}
 .contribution .bar{height:26px;opacity:.45}.contribution b{position:relative;z-index:1;display:block;text-align:center;line-height:26px;font-size:12px}
 .reconcile{border-top:2px solid #999;padding-top:10px;text-align:right}
-details{margin:12px 0;font-size:13px;color:#666}summary{cursor:pointer}
+details{margin:8px 0;font-size:13px;color:#666}summary{cursor:pointer}
 .packet{max-width:800px;background:#111;color:#eee}
 body:has(.packet){background:#111}
-.packet .card{border:0;border-top:1px solid #353535;background:transparent;padding:24px 0}
+.packet .card{border:0;border-top:1px solid #353535;background:transparent;padding:14px 0}
 .packet .muted,.packet small,.packet details,.packet .rank{color:#aaa}
 .packet a{color:#8bb9ff}.packet .pill{background:#292929;color:#ccc}
 .packet .warn{background:#28231b;color:#eedbb9}
-.packet-tabs{display:flex;gap:6px;border-bottom:1px solid #444;margin:0 0 20px;position:sticky;top:0;background:#111;z-index:5;padding:10px 0}
+.packet-tabs{display:flex;gap:6px;border-bottom:1px solid #444;margin:0 0 12px;position:sticky;top:0;background:#111;z-index:5;padding:6px 0}
 .packet-tabs a{padding:8px 12px;text-decoration:none;color:#aaa;font-size:14px}
 .packet-tabs a[aria-current="page"]{color:white;border-bottom:3px solid #8bb9ff}
 /* bundle_single_file()'s CSS-only tabs -- no JS, so it still works once
@@ -66,8 +66,16 @@ main.pkgpanel{order:2;flex:1 0 100%;display:none}
 #pt-importance:checked~.pkgpanel[data-tab=importance]{display:block}
 .headline-frame{width:100%;height:80vh;border:0;background:white}
 main.headline-shell{max-width:1500px}
+/* The sheet sizes itself to its columns (.headline-table{width:auto}), so
+   a 1500px shell left several hundred pixels of empty page beside it.
+   Only the headline tab gets pulled in -- the stats tab shares
+   .headline-shell and genuinely needs the room. 920px is the sheet's
+   measured width (~846px at week 3) plus headroom for a week of longer
+   quarterback names; anything wider still overflows to a scrollbar
+   rather than being clipped, via .headline-shell's overflow-x. */
+main.sheet-page{max-width:920px}
 .packet th{background:#222}.packet td,.packet th{border-color:#333}
-.matchup{margin:8px 0 12px}
+.matchup{margin:4px 0 8px}
 /* .matchup-head (the header/summary of each collapsible section) and
    .stat-line (each metric row inside it) MUST land their bar tracks at the
    identical x-position/width so the whole card's bars stack in one visual
@@ -79,7 +87,7 @@ main.headline-shell{max-width:1500px}
    right column is a bare gutter so the right edge lines up too. */
 .packet{--gutter:200px;--val-w:64px;--row-gap:8px}
 .stat-line{display:grid;grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter);align-items:center;gap:var(--row-gap);font-size:13px}
-.matchup-head{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter);align-items:center;gap:var(--row-gap);margin-bottom:8px;font-size:15px;font-weight:600}
+.matchup-head{display:grid;grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter);align-items:center;gap:var(--row-gap);margin-bottom:5px;font-size:15px;font-weight:600}
 .matchup-head .side{font-size:13px;display:flex;align-items:center;gap:6px;min-width:0}
 .matchup-head .side:last-child{justify-content:flex-end}
 .matchup-head .side img.logo{flex:none;display:inline-block;width:22px;height:22px;vertical-align:middle}
@@ -97,7 +105,7 @@ summary.matchup-summary::-webkit-details-marker{display:none}
 summary.matchup-summary:before{content:"▸";position:absolute;left:0;top:50%;transform:translateY(-50%);color:#888;font-size:12px}
 details.matchup[open] summary.matchup-summary:before{content:"▾"}
 details.matchup{position:relative}
-.stat-row{padding:3px 0;border-bottom:1px solid #ffffff09}
+.stat-row{padding:1px 0;border-bottom:1px solid #ffffff09}
 .stat-name{text-align:left;font-size:11px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stat-number{font-variant-numeric:tabular-nums;white-space:nowrap}
 .stat-number:last-child{text-align:right}.stat-number .rank{display:inline;margin-left:6px;font-size:11px}
@@ -112,12 +120,12 @@ details.matchup{position:relative}
 .matchup-head .net-bar .contribution,.matchup-head .net-bar .contribution .bar{height:20px}
 .matchup-head .net-bar .contribution:after{top:-4px;height:calc(100% + 8px)}
 .matchup-head .net-bar .contribution b{font-size:11px;line-height:20px}
-.packet .card{padding:12px 0}.packet .metrics{margin:12px 0;gap:24px}
-.stat-bars{display:flex;gap:8px;height:5px;margin-top:12px}
+.packet .card{padding:8px 0}.packet .metrics{margin:8px 0;gap:18px}
+.stat-bars{display:flex;gap:8px;height:5px;margin-top:8px}
 .stat-bars span{border-radius:4px;min-width:0}
 .stat-bars .left{background:var(--left-color,#888)}.stat-bars .right{background:var(--right-color,#888)}
 .stat-bars span{box-shadow:0 0 0 1px #ffffff40}
-.stat-impact{text-align:center;font-size:12px;color:#aaa;margin-top:8px}
+.stat-impact{text-align:center;font-size:12px;color:#aaa;margin-top:4px}
 .stat-impact.left,.stat-impact.right{color:#ddd}
 .stat-impact:before{content:"";display:inline-block;width:9px;height:9px;margin-right:6px;border-radius:50%;box-shadow:0 0 0 1px #ffffff60}
 .stat-impact.left:before{background:var(--left-color,#888)}.stat-impact.right:before{background:var(--right-color,#888)}
@@ -143,19 +151,27 @@ details.matchup{position:relative}
 /* .headline-table-light: the white/dark-text look of the "Copy" picture.
    The table itself isn't on the page -- picks_png() draws the picture from
    its HTML following these rules, so change both together. */
-.headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Graduate,Georgia,serif;width:100%}
-.headline-table-light th,.headline-table-light td{padding:1px 5px;border:1px solid #ddd;text-align:center;line-height:1.15;white-space:nowrap}
+.headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Graduate,Georgia,serif;width:auto}
+.headline-table-light th,.headline-table-light td{padding:1px 4px;border:1px solid #ddd;text-align:center;line-height:1.15;white-space:nowrap}
 .headline-table-light th{background:#f2f2f2;font-weight:600}
 .headline-table-light img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
-/* Column order is fixed in headline_table() -- numeric columns (spread/
-   model/diff/sd, both markets) right-align like a real figures column
-   instead of sitting dead-center; logo/date/team/pick columns stay
-   centered. Column order (headline_table sets it explicitly): 1 kickoff,
-   2 away logo, 3 away, 4 away QB, 5 spread, 6 model, 7 home QB, 8 home,
-   9 home logo, 10 diff, 11 picks, 12 O/U, 13 model, 14 diff, 15 picks. */
-.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(10),
-.headline-table-light td:nth-child(12),.headline-table-light td:nth-child(13),
-.headline-table-light td:nth-child(14){text-align:right}
+/* Figures right-align so they line up on the last digit; crests get only
+   the width they need. These positions come from HEADLINE_COLUMNS --
+   headline_indices() derives the same numbers, and a test holds the two
+   together, so reordering the sheet cannot silently misalign it.
+   1 day, 2 date, 3 time, 4 away crest, 5 away, 6 away QB, 7 rating,
+   8 spread, 9 model, 10 home QB, 11 rating, 12 home, 13 home crest,
+   14 diff, 15 picks, 16 O/U, 17 model, 18 diff, 19 picks. */
+.headline-table-light td:nth-child(3),.headline-table-light td:nth-child(7),
+.headline-table-light td:nth-child(8),.headline-table-light td:nth-child(9),
+.headline-table-light td:nth-child(11),.headline-table-light td:nth-child(14),
+.headline-table-light td:nth-child(16),.headline-table-light td:nth-child(17),
+.headline-table-light td:nth-child(18){text-align:right}
+.headline-table-light td:nth-child(1){text-align:left}
+.headline-table-light td:nth-child(4),.headline-table-light td:nth-child(13){padding:1px 2px;width:1%}
+.headline-table-light td:nth-child(7),.headline-table-light td:nth-child(11){color:#666;padding-left:1px;font-family:Graduate,Georgia,serif}
+.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(10){padding-right:2px}
+.headline-table-light td:nth-child(2){padding-left:2px;padding-right:3px}
 main.headline-shell{overflow-x:auto}
 .context-row{margin:12px 0}.context-value{font-size:12px;line-height:1.35;overflow-wrap:anywhere;color:#ccc}
 .context-value:last-child{text-align:right}.matchup-head{font-size:15px}
@@ -172,7 +188,7 @@ STYLE += '''
    dense data-table headers/numbers, which stay legible in a plain font. */
 .packet h1,.packet h2,.packet h3,.team-label,.matchup-head .side,.pkgtab-label{font-family:Graduate,Georgia,serif}
 .packet h1{letter-spacing:.04em;font-weight:400}
-.report-date{color:#aaa;margin:4px 0 18px;font-size:13px;font-family:Graduate,Georgia,serif}
+.report-date{color:#aaa;margin:2px 0 10px;font-size:13px;font-family:Graduate,Georgia,serif}
 .copy-picks{margin:0 0 14px;display:flex;align-items:center;gap:10px}
 .copy-btn{font:12px Arial,sans-serif;background:#1a1d21;color:#e3e6e9;border:1px solid #41464e;border-radius:4px;padding:6px 14px;cursor:pointer}
 .copy-btn:hover{background:#23272c}
@@ -201,14 +217,31 @@ STYLE += '''
 main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
 #pt-stats:checked~.pkgpanel[data-tab=stats]{display:block}#pt-specs:checked~.pkgpanel[data-tab=specs]{display:block}
 /* Specs tab (specs_page): label | value rows, one column on a phone. */
-.spec-card h2{margin-top:0}.spec-list{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);gap:7px 18px;margin:0;font-size:13px;line-height:1.45}
+.spec-card h2{margin-top:0;font-size:19px}
+.spec-card.tier-guide{font-size:13px}.spec-card.tier-guide summary{display:none}
+.spec-prose{margin:0;font-size:13px;line-height:1.45;color:#c7ced5}.spec-list{display:grid;grid-template-columns:minmax(120px,200px) minmax(0,1fr);gap:7px 18px;margin:0;font-size:13px;line-height:1.45}
 .spec-list dt{color:#9ba8b5}.spec-list dd{margin:0;overflow-wrap:anywhere}.spec-list .spec-list{grid-template-columns:minmax(110px,170px) minmax(0,1fr)}
 .spec-list ul{margin:0;padding-left:18px}
 @media(max-width:650px){.spec-list,.spec-list .spec-list{grid-template-columns:1fr;gap:2px}.spec-list dd{margin-bottom:8px}}
 .stats-table{background:#111;color:#e3e6e9;font:12px/1.25 Arial,sans-serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
 /* The headline sheet is all NFL font, headers and figures included. */
 .headline-table{background:#111;color:#e3e6e9;font:12px/1.15 Graduate,Georgia,serif;font-variant-numeric:tabular-nums;border-collapse:collapse}
-.headline-table{width:100%}
+/* The page and the picture are one sheet drawn twice, so the dark table
+   states the same base its light twin does. Without this it inherited the
+   stylesheet's global `td,th{text-align:right}`, which right-aligned the
+   team codes, quarterbacks and picks on the page while the picture
+   centred them -- the two never looked alike and nothing said why. */
+.headline-table td,.headline-table th{text-align:center;line-height:1.15}
+.headline-table th{font-weight:600}
+.headline-table{width:auto}
+.headline-table td:nth-child(3),.headline-table td:nth-child(7),.headline-table td:nth-child(8),
+.headline-table td:nth-child(9),.headline-table td:nth-child(11),.headline-table td:nth-child(14),
+.headline-table td:nth-child(16),.headline-table td:nth-child(17),
+.headline-table td:nth-child(18){text-align:right}
+.headline-table td:nth-child(1){text-align:left}
+.headline-table td:nth-child(4),.headline-table td:nth-child(13){padding:1px 2px;width:1%}
+.headline-table td:nth-child(7),.headline-table td:nth-child(11){color:#8b97a3;padding-left:1px;font-family:Graduate,Georgia,serif}
+.headline-table td:nth-child(6),.headline-table td:nth-child(10){padding-right:2px}
 /* Stats tables size to their own content (3-6 columns of team/value data)
    instead of stretching full-width. */
 .stats-table{width:auto;max-width:100%}
@@ -224,16 +257,16 @@ table.stats-table{display:grid;width:max-content;max-width:none}
    (the logo's height) keeps text and logos lined up in every row. */
 .packet .stats-table td{line-height:20px}.stats-table td img{vertical-align:top}
 .stats-table tbody tr:hover td{background:#1d2126}
-.packet .headline-table th{padding:4px 6px}
+.packet .headline-table th{padding:1px 4px}
 /* Confidence key, bottom right under the sheet (tier_legend). */
 .model-credit{margin:10px 0 0;font:12px Arial,sans-serif;color:#b7c0c9;text-align:right}
-.tier-legend{display:flex;flex-direction:column;align-items:flex-end;gap:3px;margin:10px 0 0;font:11px Arial,sans-serif;color:#b7c0c9;text-align:right}
+.tier-legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 16px;margin:6px 0 0;font:11px Arial,sans-serif;color:#b7c0c9;text-align:right}
 .tier-legend strong{font:12px Graduate,Georgia,serif;color:#e3e6e9}
-.tier-key{display:flex;align-items:center;gap:6px}
+.tier-key{display:flex;align-items:center;gap:5px;white-space:nowrap}
 .tier-key i{display:inline-block;width:10px;height:10px;border-radius:2px;flex:0 0 auto}
 /* The dash entry: an empty outline, because it marks the absence of a pick. */
 .tier-swatch-none{border:1px solid #6b7480;background:transparent}
-.tier-note{color:#8e99a5}
+.tier-note{color:#8e99a5;flex-basis:100%;text-align:right}
 @media(max-width:650px){.tier-legend{align-items:flex-start;text-align:left}}
 /* The expandable key under the sheet (tier_guide). */
 .tier-guide{margin:10px 0 0;font:12px/1.5 Arial,sans-serif;color:#c8cdd3}
@@ -252,7 +285,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 @media(max-width:650px){.tier-table th:nth-child(6),.tier-table td:nth-child(6),
 .tier-table th:nth-child(7),.tier-table td:nth-child(7){display:none}.tier-guide summary{text-align:left}}
 .tier-warn{color:#ffd48a}
-.packet .headline-table td{padding:1px 6px}
+.packet .headline-table td{padding:1px 4px}
 /* Every stats table formatted the same tight way (this used to be QB
    Elo-only, leaving the others visibly looser/wider) -- small logos,
    snug padding, all of them. */
@@ -260,18 +293,26 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .packet .headline-table th,.packet .stats-table th{background:#1a1d21;color:#aeb8c3;border:0;border-bottom:2px solid #41464e;white-space:nowrap}
 .packet .headline-table td,.packet .stats-table td{border:0;border-bottom:1px solid #292d32;white-space:nowrap}
 .headline-table tbody tr:hover,.stats-table tbody tr:hover{background:#1d2126}
-.headline-table img{height:24px;width:26px;object-fit:contain;vertical-align:middle}
+.headline-table img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
 .stats-table img{height:20px;width:22px;object-fit:contain;vertical-align:middle}
-.headline-table td:nth-child(3),.headline-table td:nth-child(8),
-.headline-table-light td:nth-child(3),.headline-table-light td:nth-child(8){font-family:Graduate,Georgia,serif;font-size:14px}
-.headline-table td:nth-child(5),.headline-table td:nth-child(6),.headline-table td:nth-child(10),
-.headline-table td:nth-child(12),.headline-table td:nth-child(13),.headline-table td:nth-child(14){text-align:right}
-/* The quarterbacks are reference, not numbers to compare -- small, quiet, and
-   leaning toward their own team. */
-.headline-table td:nth-child(4),.headline-table-light td:nth-child(4){text-align:left}
-.headline-table td:nth-child(7),.headline-table-light td:nth-child(7){text-align:right}
-.headline-table td:nth-child(4),.headline-table td:nth-child(7){font:11px Arial,sans-serif;color:#9ba8b5}
-.headline-table-light td:nth-child(4),.headline-table-light td:nth-child(7){font:10px Arial,sans-serif;color:#666}
+/* Team codes, at the same size as the figures beside them -- the picture
+   draws them that way and the page has to agree. This rule used to set
+   14px on positions 3 and 8, which were the team columns under the old
+   order and are now the kickoff time and the spread. */
+.headline-table td:nth-child(5),.headline-table td:nth-child(12),
+.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(12){font-weight:600}
+/* The quarterbacks are reference, not numbers to compare -- quiet, a size
+   down, with the rating tucked against the name it belongs to.
+   Positions come from HEADLINE_COLUMNS (6 and 10 are the names, 7 and 11
+   the ratings). These were written for an older column order and, when
+   the sheet gained its kickoff and rating columns, kept styling whatever
+   had moved into positions 4 and 7 -- which set the away rating in Arial
+   while the home rating stayed in the NFL font. `font:` shorthand is
+   avoided here for that reason: it silently resets the family. */
+.headline-table td:nth-child(6),.headline-table td:nth-child(7),
+.headline-table td:nth-child(10),.headline-table td:nth-child(11),
+.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(7),
+.headline-table-light td:nth-child(10),.headline-table-light td:nth-child(11){font-size:10.5px}
 .stats-table .rank{font-size:10px;line-height:1;color:#aab2bc;margin-left:6px}
 .stats-table td:first-child,.stats-table th:first-child{text-align:left}
 .sort-radio{display:none}
@@ -350,7 +391,7 @@ summary.matchup-summary{padding-left:0}summary.matchup-summary:before{left:-12px
 .site-row.weather-factor{margin:5px 0}.weather-factor .site-label{padding-left:12px;color:#ccc}
 /* Closing line: baseline + every contribution + residual = the header's number. */
 @media(max-width:650px){.packet{--gutter:130px;--val-w:55px;--row-gap:5px}.stat-line{grid-template-columns:calc(var(--gutter) - var(--val-w) - var(--row-gap)) var(--val-w) minmax(0,1fr) var(--gutter)}.matchup-head{grid-template-columns:var(--gutter) minmax(0,1fr) var(--gutter)}.site-label{white-space:normal}}
-@media(max-width:650px){.packet-bundle{padding:10px}.packet-bundle .pkgtab-label{padding:8px;font-size:12px}.headline-table img{height:26px;width:28px}}
+@media(max-width:650px){.packet-bundle{padding:10px}.packet-bundle .pkgtab-label{padding:8px;font-size:12px}}
 @media print{main.pkgpanel{display:block!important}.pkgtab-label,.pkgtab-radio{display:none!important}}
 '''
 
@@ -1124,29 +1165,51 @@ def weather_details(row):
     return kickoff, {k: v.replace('— mph', '—').replace('— in', '—') for k, v in values.items()}
 
 
-def specs_page(spec):
-    """The Specs tab: model_spec's spec for this run, as labeled sections --
-    the same content as the version folder's model.json, readable in the packet."""
+def specs_page(spec, running=None):
+    """The Specs tab: what produced the numbers, and what the pick colours
+    on the sheet actually mean.
+
+    The tier guide leads, because it is the part a reader comes looking
+    for; the rest is model_spec's spec for this run, the same content as
+    the version folder's model.json.
+
+    Nested dictionaries are flattened into one "parent · child" label
+    rather than a definition list inside a definition list -- the spec is
+    three deep in places, and indenting it that far turned a page of
+    facts into a page of structure."""
     def label(key):
         return key.replace('_', ' ').capitalize()
 
-    def render(value):
-        if isinstance(value, dict):
-            return '<dl class="spec-list">' + ''.join(
-                f'<dt>{escape(label(k))}</dt><dd>{render(v)}</dd>' for k, v in value.items()) + '</dl>'
+    def leaf(value):
         if isinstance(value, list):
             short = all(len(str(v)) < 40 for v in value)
             return (escape(', '.join(map(str, value))) if short
                     else '<ul>' + ''.join(f'<li>{escape(str(v))}</li>' for v in value) + '</ul>')
         return escape(str(value))
 
+    def rows(value, prefix=''):
+        """(label, html) pairs, one per fact, however deep it was nested."""
+        out = []
+        for key, item in value.items():
+            name = f'{prefix} · {label(key)}' if prefix else label(key)
+            if isinstance(item, dict):
+                out.extend(rows(item, name))
+            else:
+                out.append((name, leaf(item)))
+        return out
+
+    def section(key, value):
+        body = ('<dl class="spec-list">'
+                + ''.join(f'<dt>{escape(name)}</dt><dd>{html}</dd>' for name, html in rows(value))
+                + '</dl>') if isinstance(value, dict) else f'<p class="spec-prose">{leaf(value)}</p>'
+        return f'<section class="card spec-card"><h2>{escape(label(key))}</h2>{body}</section>'
+
     model = spec['model']
     head = (f'<h1>{escape(model["name"])} {escape(model["version"])}</h1>'
             f'<p class="report-date">Code {escape(model["code"])} · generated {escape(model["generated"])} · '
-            'also saved as ../model.json for this model version</p>')
-    sections = ''.join(f'<section class="card spec-card"><h2>{escape(label(key))}</h2>{render(value)}</section>'
-                       for key, value in spec.items() if key != 'model')
-    return head + sections
+            'also saved as ../model.json</p>')
+    return (head + tier_guide(running, standalone=True)
+            + ''.join(section(key, value) for key, value in spec.items() if key != 'model'))
 
 
 def packet_tabs(active):
@@ -1263,6 +1326,7 @@ TIER_MODEL = 'Model 2.0 · weighted'   # the model the packet builds today
 # same games returns 51.9%, so the model added about a point and a half --
 # real, but not enough to bet.
 SHARED_MODEL = 'Model 2.1 · shared'
+SOLVED_MODEL = 'Model 2.0 · solved'
 # A bucket is measured on ONE model and only fires on that model. This is not
 # bookkeeping: the weeks 1-12 spread band below is 54.9% on the shared model
 # and 47-49% on all five two-sided runs, so applying it to the wrong one turns
@@ -1289,6 +1353,24 @@ PICK_BUCKETS = {
                   '(46.6%), which fits: in September nothing is decided, so the number measures nothing. '
                   'This replaced an SD-based rule that scored the same here but fell to 52.4% and 49.4% on '
                   'two of the siblings; this one holds at 59-60% on all four, worst era 58%.'),
+    ]),
+    'spread_solved': dict(edge=2.0, buckets=[
+        dict(rule='weeks 1-5, the model off the spread by 4 or more, ensemble SD at most 4.0',
+             test=lambda week, importance, sd, line, edge: (week <= 5 and edge is not None
+                                                            and abs(edge) >= 4
+                                                            and sd is not None and sd <= 4.0),
+             model=SOLVED_MODEL, rate=.585, n=200, worth='+1.8u a season on ~15 picks, up 10 of 13 years',
+             eras='55 / 60 / 65 / 56%',
+             siblings='not yet measured on other runs',
+             note='The first spread edge before week 13, and it came from fixing an input rather than '
+                  'finding a filter. The decay presets price a prior-season game at their 0.05 floor by '
+                  'September; taper_solver.py fits 0.40, so in week 2 the default model reads a 5.0 '
+                  'yards-per-play team that had one 15.0 game as a 10.4 team. Correcting that lifts weeks '
+                  '1-5 spread IC from 0.239 to 0.292 on the same 1011 games. Two honest caveats: paired '
+                  'against the default on identical games the pick-level gain is 62-50 on 112 '
+                  'disagreements (McNemar p = 0.30), and the shuffled-outcome null beats 58.5% in 18 of '
+                  '400 tries (p = 0.045) -- it passed, not comfortably. Weeks 6-12 are still backtesting; '
+                  'if the edge extends, this window widens.'),
     ]),
     'total': dict(edge=5.0, buckets=[
         # Ordered, and each rate is measured on what the buckets above it
@@ -1338,6 +1420,15 @@ PICK_BUCKETS = {
 }
 # What the buckets deliberately leave out, and what it would have cost.
 NO_PICK = {
+    'spread_solved': dict(model=SOLVED_MODEL,
+                   rule='every other weeks 1-5 spread: a smaller disagreement, or the ensemble not '
+                        'agreeing with itself',
+                   record='51.6% of 459 would-be picks, -1.4% per bet', worth='-0.5u a season on ~35 picks',
+                   eras='50 / 54 / 44 / 58%',
+                   note='Fixing the taper lifts the whole early-season slate, but only the corner where the '
+                        'model both disagrees loudly and agrees with itself clears the bar. The rest is '
+                        'a point above break-even before vig and a point below it after -- which is still '
+                        'a different animal from the default model here, where the same games are 50.1%.'),
     'spread': dict(model=TIER_MODEL, rule='every other spread: any week before 13, and late games with '
                                           'nothing riding on them',
                    record='49.8% of 2599 would-be picks, -4.9% per bet', worth='-8.0u a season on ~162 picks',
@@ -1378,7 +1469,8 @@ def market_key(market, running=None):
     none -- the case today -- this is the identity, and pick_bucket's model
     filter then finds nothing, which is the right answer for a model with no
     measured edge."""
-    own = {SHARED_MODEL: f'{market}_shared'}.get(running or TIER_MODEL)
+    own = {SHARED_MODEL: f'{market}_shared',
+           SOLVED_MODEL: f'{market}_solved'}.get(running or TIER_MODEL)
     return own if own in PICK_BUCKETS else market
 
 
@@ -1417,7 +1509,7 @@ def apply_tiers(frame, market, running=None):
     return data
 
 
-def tier_guide(running=None):
+def tier_guide(running=None, standalone=False):
     # running: the model behind one market, or {market: model} when the packet
     # carries two -- each section is judged against ITS market's model, not
     # the packet's first one.
@@ -1432,7 +1524,9 @@ def tier_guide(running=None):
     sections = []
     for market, spec in PICK_BUCKETS.items():
         owner = spec['buckets'][0]['model']
-        serves = market.replace('_shared', '')
+        # 'spread_solved' / 'total' -> 'spread' / 'total': the suffix names
+        # which model owns the bucket set, not a different market.
+        serves = market.split('_')[0]
         live = behind.get(serves) in (None, owner)
         rows = ''
         for bucket in sorted(spec['buckets'], key=lambda b: -b['rate']):
@@ -1453,7 +1547,7 @@ def tier_guide(running=None):
                  f'<td class="tier-record">{escape(skip["eras"])}</td><td class="tier-record">—</td></tr>'
                  f'<tr class="tier-note-row"><td></td><td colspan="6">{escape(skip["note"])}</td></tr>')
         sections.append(
-            f'<h4>{escape(market.replace("_shared", "").title())} picks · {escape(owner)}'
+            f'<h4>{escape(serves.title())} picks · {escape(owner)}'
             + ('' if live else ' <em>(not the model behind this column — shown for reference, '
                'never fires here)</em>') + '</h4>'
             f'<p class="tier-qualify">A pick needs the model to disagree with the market by at least '
@@ -1477,7 +1571,11 @@ def tier_guide(running=None):
                     'buckets of its own — every rate below was measured on a different model. The buckets still '
                     'decide the picks, but their hit rates do not describe this one; see "Other runs" for how '
                     'far they move.</p>')
-    return ('<details class="tier-guide"><summary>What the pick colours mean</summary>' + mismatch
+    open_tag, close_tag = (('<section class="card spec-card tier-guide"><h2>Pick tiers</h2>', '</section>')
+                           if standalone else
+                           ('<details class="tier-guide"><summary>What the pick colours mean</summary>',
+                            '</details>'))
+    return (open_tag + mismatch
             + f'<p class="tier-qualify">The letter is the bucket’s measured hit rate, not a judgement: '
             f'{bands}, and under 54% is no pick at all.</p>'
             + ''.join(sections) + bottom
@@ -1486,7 +1584,7 @@ def tier_guide(running=None):
               'steep-lookback and Model 2.1 backtests: different models, shown so you can see which buckets '
               'survive a change of model and which do not. Break-even at -110 is 52.4%. The dash row is not a weak pick, it is no '
               'pick: those games lose money, so the sheet leaves them blank rather than grading them. Hit rates '
-              'are what a bucket did historically, not a forecast for any single pick.</p></details>')
+              'are what a bucket did historically, not a forecast for any single pick.</p>' + close_tag)
 
 
 def running_model(folder, market=None):
@@ -1514,29 +1612,19 @@ def running_model(folder, market=None):
     return None
 
 
-def model_credits(behind):
-    """One line naming the model behind each column, because a packet can now
-    carry two and a pick means nothing without knowing which one made it."""
-    named = [(market, model) for market, model in behind.items() if model]
-    if not named or len({model for _, model in named}) == 1:
-        only = named[0][1] if named else None
-        return (f'<p class="model-credit">Every pick on this sheet: {escape(only)}.</p>') if only else ''
-    parts = ', '.join(f'{"spread" if market == "spread" else "total"} {escape(model)}' for market, model in named)
-    return (f'<p class="model-credit">Two models on this sheet — {parts}. Each column is graded against the '
-            'buckets measured on its own model; they are not interchangeable.</p>')
-
-
 def tier_legend(markets=('spread', 'total')):
     """The small colour key in the corner of the sheet: the bands themselves,
     since a letter now means one thing in both markets."""
     items = ''.join(f'<span class="tier-key"><i style="background:{TIER_COLORS[tier]}"></i>'
                     f'{escape(tier)} {escape(BAND_LABELS[tier])}</span>' for tier, _ in TIER_BANDS)
+    # Provenance and the break-even line live on the Specs tab. Under the
+    # sheet they were a paragraph of footnote between the reader and the
+    # picks; the swatches alone say what the colours mean.
     return (f'<div class="tier-legend"><strong>Hit rate</strong>{items}'
-            '<span class="tier-key"><i class="tier-swatch-none"></i>– under 54%, no bet</span>'
-            f'<span class="tier-note">Measured on {escape(TIER_SOURCE)}. Break-even is 52.4%.</span></div>')
+            '<span class="tier-key"><i class="tier-swatch-none"></i>– under 54%, no bet</span></div>')
 
 
-def copy_picks_widget(season, week, light_table, model=None):
+def copy_picks_widget(season, week, light_table):
     """A "Copy" button for a picture of the picks table (picks_png, drawn
     in Python when the packet is built, so it exists no matter where the
     file is opened). Clicking it puts that PNG on the clipboard where the
@@ -1549,7 +1637,10 @@ def copy_picks_widget(season, week, light_table, model=None):
     checkbox: it reveals the picture itself, which any browser lets you
     right-click (desktop) or long-press (phone) to copy or save. When a
     script copy succeeds, the click is cancelled before the checkbox flips."""
-    subtitle = f'{int(season)} Week {int(week)}' + (f' · {model}' if model else '')
+    # Season and week only. Which model produced which column is recorded
+    # in models.json and named per bucket in the tier guide; on the sheet
+    # itself it was a line of machinery above the thing you came to read.
+    subtitle = f'{int(season)} Week {int(week)}'
     legend = [(TIER_COLORS[tier], f'{tier}  hit rate {BAND_LABELS[tier]}') for tier, _ in TIER_BANDS]
     legend.append(('#ffffff', '–  under 54%, no bet'))
     png, width = picks_png(light_table, 'Model', subtitle, legend=legend)
@@ -1625,15 +1716,20 @@ def picks_png(light_table, title, subtitle, legend=(), scale=2):
             fonts[face, size] = ImageFont.truetype(faces[face], round(size * scale))
         return fonts[face, size]
 
-    team_columns, right_columns = {3, 6}, {4, 5, 8, 10, 11, 12}  # 0-based; see headline_table's column order
+    # Derived from HEADLINE_COLUMNS, not written out again: these were
+    # hardcoded here and in the CSS separately, and had already drifted
+    # (the home-logo column was being right-aligned and the last figure
+    # column was not).
+    small_columns = set(headline_indices(HEADLINE_SMALL, base=0))
+    right_columns = set(headline_indices(HEADLINE_RIGHT, base=0))
     rows = []
     for row in (r for r in parsed.rows if r):
         styled = []
         for column, cell in enumerate(row):
             rule = styles.get(cell['id'], {})
             bold = cell['head'] or rule.get('font-weight') in ('600', '700', 'bold')
-            team = not cell['head'] and column in team_columns
-            size = 14 if team else 12
+            quiet = not cell['head'] and column in small_columns
+            size = 10.5 if quiet else 12
             styled.append(dict(
                 cell, text=cell['text'].strip(), size=size,
                 # The whole sheet is Graduate, which has one weight -- browsers
@@ -1644,13 +1740,27 @@ def picks_png(light_table, title, subtitle, legend=(), scale=2):
                 right=not cell['head'] and column in right_columns))
         rows.append(styled)
 
-    pad_x, pad_y, grid, logo_px = 6 * scale, 2 * scale, scale, 16 * scale
+    # Padding is charged per column, and nineteen columns of it is most of
+    # the sheet's width. Columns that hold one small thing -- a crest, a
+    # rating that belongs to the name beside it -- get only what they need.
+    pad_y, grid, logo_px = 2 * scale, scale, 16 * scale
+    narrow = set(headline_indices(HEADLINE_TIGHT | {'away_elo', 'home_elo'}, base=0))
+    # A rating sits tight against its quarterback; the gap belongs on the
+    # far side so the two read as one field.
+    snug = set(headline_indices({'away_qb', 'home_qb'}, base=0))
+
+    def padding(column):
+        if column in narrow:
+            return 2 * scale
+        if column in snug:
+            return 3 * scale
+        return 4 * scale
     columns = max(len(row) for row in rows)
     widths = [0] * columns
     for row in rows:
         for column, cell in enumerate(row):
             content = logo_px if cell['logo'] else cell['font'].getlength(cell['text'])
-            widths[column] = max(widths[column], int(content + 0.999) + 2 * pad_x)
+            widths[column] = max(widths[column], int(content + 0.999) + 2 * padding(column))
     heights = [max(max(round(cell['size'] * 1.25 * scale), logo_px if cell['logo'] else 0) for cell in row) + 2 * pad_y
                for row in rows]
 
@@ -1661,9 +1771,13 @@ def picks_png(light_table, title, subtitle, legend=(), scale=2):
     table_top = margin + title_h + 2 * scale + subtitle_h + 10 * scale
     table_w = sum(widths) + (columns + 1) * grid
     table_h = sum(heights) + (len(rows) + 1) * grid
-    swatch, gap, line_gap = 8 * scale, 6 * scale, round(13 * scale)
-    legend_w = max([legend_font.getlength(text) + swatch + gap for _, text in legend] or [0])
-    legend_h = (len(legend) * line_gap + 8 * scale) if legend else 0
+    # The key reads across in one line rather than stacking: four short
+    # entries down the right-hand side left a tall empty block beside them,
+    # and a row of swatches is quicker to scan anyway.
+    swatch, gap, between = 8 * scale, 5 * scale, 16 * scale
+    entry_w = [legend_font.getlength(text) + swatch + gap for _, text in legend]
+    legend_w = sum(entry_w) + between * max(len(legend) - 1, 0) if legend else 0
+    legend_h = (round(13 * scale) + 8 * scale) if legend else 0
     image = Image.new('RGB', (round(max(table_w, legend_w)) + 2 * margin,
                               table_top + table_h + legend_h + margin), '#ffffff')
     draw = ImageDraw.Draw(image)
@@ -1684,20 +1798,21 @@ def picks_png(light_table, title, subtitle, legend=(), scale=2):
                 mark.thumbnail((logo_px, logo_px), Image.LANCZOS)
                 image.paste(mark, (round(x + (width - mark.width) / 2), round(middle - mark.height / 2)), mark)
             elif cell['text']:
-                anchor, left = ('rm', x + width - pad_x) if cell['right'] else ('mm', x + width / 2)
+                anchor, left = ('rm', x + width - padding(column)) if cell['right'] else ('mm', x + width / 2)
                 draw.text((left, middle), cell['text'], font=cell['font'], fill=cell['color'], anchor=anchor,
                           stroke_width=scale // 2 if cell['stroke'] else 0, stroke_fill=cell['color'])
             x += width + grid
         y += height + grid
-    # Confidence key under the table, right-aligned like the page's own.
+    # Confidence key under the table, one line, ending flush with its right
+    # edge the way the page's own key does.
     right = margin + max(table_w, legend_w)
     y = table_top + table_h + 8 * scale
-    for color, text in legend:
-        width = legend_font.getlength(text)
-        box = right - width - swatch - gap
-        draw.rectangle([box, y + 2 * scale, box + swatch, y + 2 * scale + swatch], fill=color, outline='#cccccc')
-        draw.text((right, y), text, font=legend_font, fill='#444444', anchor='ra')
-        y += line_gap
+    x = right - legend_w
+    for (color, text), width in zip(legend, entry_w):
+        draw.rectangle([x, y + 2 * scale, x + swatch, y + 2 * scale + swatch],
+                       fill=color, outline='#cccccc')
+        draw.text((x + swatch + gap, y), text, font=legend_font, fill='#444444', anchor='la')
+        x += width + between
     buffer = io.BytesIO()
     image.save(buffer, 'PNG', optimize=True, dpi=(72 * scale, 72 * scale))
     return buffer.getvalue(), image.width // scale
@@ -1723,7 +1838,44 @@ function copyPicksImage(event){
 '''
 
 
-def headline_table(folder, light=False):
+# The headline sheet's columns, in order, and how each is drawn. Three
+# places used to hardcode this independently -- headline_table's own
+# select/relabel, the .headline-table-light nth-child CSS, and picks_png's
+# index sets -- and they had already drifted out of step (picks_png
+# right-aligned the home-logo column and missed the last figure column).
+# One list now, and a test pins the CSS to it.
+#
+# Kickoff is three columns rather than one so the day, the date and the
+# time each line up down the sheet instead of sliding around with the
+# length of the one before it; the QB's rating is split off his name for
+# the same reason. Neither split adds a header -- they read as one field.
+HEADLINE_COLUMNS = ['kick_day', 'kick_date', 'kick_time',
+                    'away_logo', 'away_team', 'away_qb', 'away_elo',
+                    'spread', 'prediction',
+                    'home_qb', 'home_elo', 'home_team', 'home_logo',
+                    'diff', 'pick', 'total', 'total_prediction', 'total_diff', 'total_pick']
+HEADLINE_LABELS = ['Kickoff', '', 'ET', '', 'Away', 'QB', 'Elo', 'Spread', 'Model',
+                   'QB', 'Elo', 'Home', '', 'Diff', 'Picks', 'O/U', 'Model', 'Diff', 'Picks']
+# Figures line up on their last digit; everything else stays centred.
+HEADLINE_RIGHT = {'kick_time', 'away_elo', 'home_elo', 'spread', 'prediction',
+                  'diff', 'total', 'total_prediction', 'total_diff'}
+# Drawn a size DOWN: the quarterback and his rating are there to be
+# checked, not compared across rows like the figures are, and at the same
+# size as everything else the names were the loudest thing on the sheet.
+HEADLINE_SMALL = {'away_qb', 'home_qb', 'away_elo', 'home_elo'}
+# Just wide enough for a 16px crest.
+HEADLINE_TIGHT = {'away_logo', 'home_logo'}
+# What a row says when no bucket covers it -- a dash, not a word, so the
+# eye skips it and the picks are what stand out (see NO_PICK).
+PASS_MARK = '–'
+
+
+def headline_indices(names, base=1):
+    """Which column positions a set of column names occupies."""
+    return [i + base for i, column in enumerate(HEADLINE_COLUMNS) if column in names]
+
+
+def headline_table(folder, light=False, guide=True):
     """Per-game summary across both markets -- same mechanism and column
     order as main.py's original h_to_the_tml (pandas Styler, Greens/Reds
     background_gradient on diff/sd, #ffe590 yellow highlight only on cells
@@ -1757,34 +1909,36 @@ def headline_table(folder, light=False):
         sched, on=['season', 'week', 'away_team', 'home_team'], how='left')
 
     def quarterback(row, side):
-        """'J.Daniels 49.8' -- the scheduled starter and his rating going in.
-        The sheet has room for it since the SD column came out, and it is the
-        one thing a reader checks before trusting a number on this row."""
+        """The scheduled starter's name, and his rating going in, as two
+        values -- they share a heading on the sheet but sit in their own
+        columns so the ratings line up down the page instead of trailing
+        off the end of names of different lengths."""
         name = row.get(f'{side}_qb_short')
         if pd.isna(name) or not str(name).strip():
             name = row.get(f'{side}_qb_name')
-        elo = row.get(f'{side}_raw_off_qb_elo')
         if pd.isna(name) or not str(name).strip():
-            return ''
-        return f'{name}' + (f' {elo:.0f}' if pd.notna(elo) else '')
+            return '', ''
+        elo = row.get(f'{side}_raw_off_qb_elo')
+        return str(name), ('' if pd.isna(elo) else f'{elo:.1f}')
 
     def market_fields(frame, g, market):
         match = frame[(frame.away_team == g.away_team) & (frame.home_team == g.home_team)] if frame is not None else None
         if match is None or match.empty:
             return dict(line=np.nan, model=np.nan, diff=np.nan, sd=np.nan, tier=None, pick='',
-                    away_qb='', home_qb=''), None
+                    away_qb='', away_elo='', home_qb='', home_elo=''), None
         r = match.iloc[0]
         pick = (r.away_team if r.edge > 0 else r.home_team) if market == 'spread' else ('OVER' if r.edge > 0 else 'UNDER')
-        pick = pick if bool(r.qualifies) else 'PASS'
+        pick = pick if bool(r.qualifies) else PASS_MARK
         # market_base/prediction are stored away-minus-home; flip sign for
         # spread so both read as the away team's own line ("team -X" =
         # away favored by X), matching game_header's Market/Model rows.
         # Total has no team-perspective concept, so it's left alone.
         sign = -1 if market == 'spread' else 1
+        (away_qb, away_elo), (home_qb, home_elo) = quarterback(r, 'away'), quarterback(r, 'home')
         return (dict(line=sign * r.market_base, model=sign * r.prediction, diff=abs(r.edge), sd=r.sd,
                      market_line=r.market_base, tier=r.get('tier'), pick=pick,
-                     away_qb=quarterback(r, 'away'), home_qb=quarterback(r, 'home')),
-                (pick if pick != 'PASS' else None))
+                     away_qb=away_qb, away_elo=away_elo, home_qb=home_qb, home_elo=home_elo),
+                (pick if pick != PASS_MARK else None))
 
     rows = []
     picks = set()
@@ -1804,6 +1958,7 @@ def headline_table(folder, light=False):
         rows.append(dict(
             gameday=g.gameday, gametime=g.gametime,
             away_logo=g.away_team, away_team=g.away_team, away_qb=qbs.get('away_qb', ''),
+            away_elo=qbs.get('away_elo', ''), home_elo=qbs.get('home_elo', ''),
             spread=spread['line'], prediction=spread['model'],
             home_qb=qbs.get('home_qb', ''), home_team=g.home_team, home_logo=g.home_team,
             diff=spread['diff'], pick=spread['pick'],
@@ -1818,15 +1973,17 @@ def headline_table(folder, light=False):
     # Tiers ride along for the sort, then step out of the displayed frame.
     tiers = table[['spread_tier', 'total_tier']]
     table = table.drop(columns=['spread_tier', 'total_tier'])
-    # Date and time were two columns saying one thing; one kickoff column
-    # gives the width back to the numbers.
-    table['kickoff'] = [f"{day.strftime('%a %m/%d')} {time.strftime('%I:%M').lstrip('0')}" if time
-                        else day.strftime('%a %m/%d')
-                        for day, time in zip(table.gameday, table.gametime)]
+    # Day, date and time as three columns: as one string the pieces slid
+    # around with each other's length ("Thu 09/24 8:15" against
+    # "Sun 09/27 12:00"), so nothing lined up down the sheet. Split, each
+    # sits in its own plane and the column is no wider for it. Times carry
+    # am/pm -- every kickoff is Eastern, which the heading says once.
+    table['kick_day'] = [day.strftime('%a') for day in table.gameday]
+    table['kick_date'] = [day.strftime('%m/%d') for day in table.gameday]
+    table['kick_time'] = [time.strftime('%I:%M %p').lstrip('0').lower() if time else ''
+                          for time in table.gametime]
     table = table.drop(columns=['gameday', 'gametime'])
-    table = table[['kickoff', 'away_logo', 'away_team', 'away_qb', 'spread', 'prediction',
-                   'home_qb', 'home_team', 'home_logo', 'diff', 'pick',
-                   'total', 'total_prediction', 'total_diff', 'total_pick']]
+    table = table[HEADLINE_COLUMNS]
 
     def signed(value, precision=1):
         return '—' if pd.isna(value) else f'{value:+.{precision}f}'
@@ -1851,11 +2008,15 @@ def headline_table(folder, light=False):
         return escape(code)
 
     from matplotlib.colors import LinearSegmentedColormap
+    # The size of a disagreement is shaded blue, not green: green is what a
+    # qualifying A pick is painted (TIER_COLORS), and a deep green Diff cell
+    # beside it read as though the row had been picked when it had not.
+    # Blue is unused by any tier, so the two can never be mistaken.
     if light:
-        greens = LinearSegmentedColormap.from_list('headline_greens_light', ['#eafaf0', '#4caf7d'])
+        blues = LinearSegmentedColormap.from_list('headline_blues_light', ['#eaf1fa', '#4a86c8'])
         reds = LinearSegmentedColormap.from_list('headline_reds_light', ['#fdf0ef', '#e2726b'])
     else:
-        greens = LinearSegmentedColormap.from_list('headline_greens', ['#151b18', '#20513c'])
+        blues = LinearSegmentedColormap.from_list('headline_blues', ['#141a21', '#1d4368'])
         reds = LinearSegmentedColormap.from_list('headline_reds', ['#1b1717', '#643536'])
 
     # Column order is fixed and documented here (also relied on by the
@@ -1880,7 +2041,7 @@ def headline_table(folder, light=False):
     css_class = 'headline-table-light' if light else 'headline-table'
     styled = table.style.hide(axis='index').set_table_attributes(f'class="{css_class}"')
     if gradient_diff:
-        styled = styled.background_gradient(subset=gradient_diff, cmap=greens)
+        styled = styled.background_gradient(subset=gradient_diff, cmap=blues)
     if gradient_sd:
         styled = styled.background_gradient(subset=gradient_sd, cmap=reds)
     styled = (styled.format({
@@ -1889,11 +2050,19 @@ def headline_table(folder, light=False):
                  'away_logo': lambda x: logo(x), 'home_logo': lambda x: logo(x),
                  'away_team': team_cell, 'home_team': team_cell,
              })
-             .relabel_index(['Kickoff', '', 'Away', 'QB', 'Spread', 'Model', 'QB', 'Home', '',
-                             'Diff', 'Picks', 'O/U', 'Model', 'Diff', 'Picks'], axis=1)
+             .relabel_index(HEADLINE_LABELS, axis=1)
              .apply(tier_styles, axis=None))
     behind = {market: running_model(folder, market) for market in ['spread', 'total']}
-    return styled.to_html() + model_credits(behind) + tier_legend() + tier_guide(behind)
+    if not guide:
+        # For the picture (picks_png): the sheet and who produced it, nothing
+        # else. picks_png flattens every table it is handed into one grid, so
+        # the guide's bucket notes -- full sentences on a single unwrapped
+        # line -- would set the image's width, which is how the picks table
+        # ended up drawn 6983 CSS px wide with the columns pushed to either
+        # edge. The tier key is redundant there too: picks_png draws its own
+        # from `legend`.
+        return styled.to_html()
+    return styled.to_html() + tier_legend()
 
 
 def write_packets(predictions, panel, importance, config, root):
@@ -2032,13 +2201,17 @@ def write_packets(predictions, panel, importance, config, root):
                            for name in ['spread', 'total'] if (folder / f'{name}_importance.html').exists())
         (folder / 'importance.html').write_text(page(title, packet_tabs('importance') + evidence, 'packet'), encoding='utf-8')
         headline = (f'<h1>Model</h1><p class="report-date">{int(season)} · Week {int(week)}</p>'
-                   + copy_picks_widget(season, week, headline_table(folder, light=True),
-                                       running_model(folder)) + headline_table(folder))
-        (folder / 'index.html').write_text(page(title, packet_tabs('headline') + headline, 'packet headline-shell'), encoding='utf-8')
+                   + copy_picks_widget(season, week, headline_table(folder, light=True, guide=False))
+                   + headline_table(folder))
+        (folder / 'index.html').write_text(
+            page(title, packet_tabs('headline') + headline, 'packet headline-shell sheet-page'), encoding='utf-8')
         (folder / 'stats.html').write_text(page(title, packet_tabs('stats') + '<h1>Stats</h1>'
             + stats_tables(snapshot, games, season, week, config['lookback'], weighted_snapshot), 'packet headline-shell'), encoding='utf-8')
         if config.get('spec'):
-            (folder / 'specs.html').write_text(page(title, packet_tabs('specs') + specs_page(config['spec']), 'packet'),
+            (folder / 'specs.html').write_text(
+                page(title, packet_tabs('specs')
+                     + specs_page(config['spec'],
+                                  {m: running_model(folder, m) for m in ['spread', 'total']}), 'packet'),
                                                encoding='utf-8')
         for missing in ['spread', 'total']:
             if not (folder / f'{missing}.html').exists():
