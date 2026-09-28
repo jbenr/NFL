@@ -69,11 +69,12 @@ main.headline-shell{max-width:1500px}
 /* The sheet sizes itself to its columns (.headline-table{width:auto}), so
    a 1500px shell left several hundred pixels of empty page beside it.
    Only the headline tab gets pulled in -- the stats tab shares
-   .headline-shell and genuinely needs the room. 920px is the sheet's
-   measured width (~846px at week 3) plus headroom for a week of longer
+   .headline-shell and genuinely needs the room. 1000px is the sheet's
+   width (~846px measured at week 3 with 1px 4px cells; 2px 6px adds
+   ~2px a side to most of its columns) plus headroom for longer
    quarterback names; anything wider still overflows to a scrollbar
    rather than being clipped, via .headline-shell's overflow-x. */
-main.sheet-page{max-width:920px}
+main.sheet-page{max-width:1000px}
 .packet th{background:#222}.packet td,.packet th{border-color:#333}
 .matchup{margin:4px 0 8px}
 /* .matchup-head (the header/summary of each collapsible section) and
@@ -152,7 +153,7 @@ details.matchup{position:relative}
    The table itself isn't on the page -- picks_png() draws the picture from
    its HTML following these rules, so change both together. */
 .headline-table-light{background:#fff;color:#222;border-collapse:collapse;font-size:12px;font-family:Graduate,Georgia,serif;width:auto}
-.headline-table-light th,.headline-table-light td{padding:1px 4px;border:1px solid #ddd;text-align:center;line-height:1.15;white-space:nowrap}
+.headline-table-light th,.headline-table-light td{padding:2px 6px;border:1px solid #ddd;text-align:center;line-height:1.15;white-space:nowrap}
 .headline-table-light th{background:#f2f2f2;font-weight:600}
 .headline-table-light img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
 main.headline-shell{overflow-x:auto}
@@ -232,7 +233,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
    (the logo's height) keeps text and logos lined up in every row. */
 .packet .stats-table td{line-height:20px}.stats-table td img{vertical-align:top}
 .stats-table tbody tr:hover td{background:#1d2126}
-.packet .headline-table th{padding:1px 4px}
+.packet .headline-table th{padding:2px 6px}
 /* Confidence key, bottom right under the sheet (tier_legend). */
 .model-credit{margin:10px 0 0;font:12px Arial,sans-serif;color:#b7c0c9;text-align:right}
 .tier-legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 16px;margin:6px 0 0;font:11px Arial,sans-serif;color:#b7c0c9;text-align:right}
@@ -260,7 +261,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 @media(max-width:650px){.tier-table th:nth-child(6),.tier-table td:nth-child(6),
 .tier-table th:nth-child(7),.tier-table td:nth-child(7){display:none}.tier-guide summary{text-align:left}}
 .tier-warn{color:#ffd48a}
-.packet .headline-table td{padding:1px 4px}
+.packet .headline-table td{padding:2px 6px}
 /* Every stats table formatted the same tight way (this used to be QB
    Elo-only, leaving the others visibly looser/wider) -- small logos,
    snug padding, all of them. */
@@ -1719,7 +1720,7 @@ def picks_png(light_table, title, subtitle, legend=(), scale=2):
             return 2 * scale
         if column in snug:
             return 3 * scale
-        return 4 * scale
+        return 6 * scale
     columns = max(len(row) for row in rows)
     widths = [0] * columns
     for row in rows:
