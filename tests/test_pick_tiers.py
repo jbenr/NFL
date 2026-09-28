@@ -436,3 +436,36 @@ class SheetPageIsNoWiderThanTheSheet(unittest.TestCase):
                 self.assertNotIn('sheet-page', statement,
                                  'the stats tab needs the wide shell, not the sheet width')
                 break
+
+
+class SheetIsMirroredAboutTheSpread(unittest.TestCase):
+    """Each side reads quarterback, rating, crest, team inwards toward the
+    market line, so the two teams face each other across it."""
+
+    def positions(self):
+        return {name: i for i, name in enumerate(wp.HEADLINE_COLUMNS)}
+
+    def test_the_two_sides_mirror_each_other(self):
+        at = self.positions()
+        away = [at['away_qb'], at['away_elo'], at['away_logo'], at['away_team']]
+        home = [at['home_team'], at['home_logo'], at['home_qb'], at['home_elo']]
+        self.assertEqual(away, sorted(away), 'the away side is not ordered qb, elo, crest, team')
+        self.assertEqual(home, sorted(home), 'the home side is not ordered team, crest, qb, elo')
+
+    def test_the_market_numbers_sit_between_the_teams(self):
+        at = self.positions()
+        for column in ('spread', 'prediction'):
+            self.assertLess(at['away_team'], at[column], f'{column} is not after the away team')
+            self.assertLess(at[column], at['home_team'], f'{column} is not before the home team')
+
+    def test_each_rating_still_touches_its_quarterback(self):
+        at = self.positions()
+        self.assertEqual(at['away_elo'], at['away_qb'] + 1)
+        self.assertEqual(at['home_elo'], at['home_qb'] + 1)
+
+    def test_the_position_css_is_generated_not_written_out(self):
+        """Hand-written nth-child rules went stale on every reorder. The
+        generated block has to actually be in the stylesheet."""
+        generated = wp.headline_style()
+        self.assertTrue(generated.strip())
+        self.assertIn(generated, wp.STYLE, 'headline_style() output never reached STYLE')

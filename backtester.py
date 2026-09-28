@@ -811,6 +811,10 @@ if __name__ == '__main__':
                              "'percentile' rank each team against that week's league first. Independent of "
                              "--inputs: separate+zscore is what the two-sided production model uses.")
     parser.add_argument('--output')
+    parser.add_argument('--keep-going', action='store_true',
+                        help='In a sweep, carry on after an arm fails. The default stops, because a '
+                             'worker pool dying or the box running out of memory is not specific to one '
+                             'configuration and the arms behind it would fail the same way.')
 # Options that define WHICH model a run is, as opposed to how it is
 # executed. Each takes a list, and the backtester walks every combination
 # they make -- one sweep, one process, so the runs share a warm feature
@@ -937,15 +941,33 @@ if __name__ == '__main__':
             print(f'\n{"=" * 78}\n[{number}/{len(sweep)}] {describe(run, sweep)}\n{"=" * 78}', flush=True)
         try:
             done.append((describe(run, sweep), run_one(run, parser), None))
-        except Exception as failure:          # one bad combination must not
-            if len(sweep) == 1:               # lose the rest of the sweep
+        except Exception as failure:
+            if len(sweep) == 1:
                 raise
+            # The whole traceback, not just the message. A sweep runs
+            # unattended for hours; "BrokenProcessPool" on its own says
+            # nothing about which worker died or why.
+            import traceback
             print(f'  FAILED: {type(failure).__name__}: {failure}', flush=True)
+            traceback.print_exc()
             done.append((describe(run, sweep), None, failure))
+            if not args.keep_going and not isinstance(failure, (ValueError, KeyError)):
+                # A worker pool dying, a file missing, the box running out
+                # of memory -- none of that is specific to this
+                # configuration, so the arms behind it will hit the same
+                # wall. Stop instead of spending hours proving it.
+                remaining = len(sweep) - number
+                print(f'\nStopping: this looks like a failure of the run rather than of the '
+                      f'configuration, so the {remaining} arm(s) behind it would likely fail the '
+                      f'same way.\nRe-run with --keep-going to push through it.', flush=True)
+                for skipped in sweep[number:]:
+                    done.append((describe(skipped, sweep), None, 'not attempted'))
+                break
     if len(sweep) > 1:
         print(f'\n{"=" * 78}\nSWEEP OF {len(sweep)} RUNS\n{"=" * 78}')
         for label, output, failure in done:
-            print(f'  {"FAILED " if failure else "ok     "}{label:<52} {output or ""}')
+            mark = 'ok     ' if not failure else ('skipped' if failure == 'not attempted' else 'FAILED ')
+            print(f'  {mark}{label:<52} {output or ""}')
         good = [output for _, output, failure in done if not failure and output]
         if len(good) > 1:
             print('\nScore them against each other on their shared games:')

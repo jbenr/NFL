@@ -155,23 +155,6 @@ details.matchup{position:relative}
 .headline-table-light th,.headline-table-light td{padding:1px 4px;border:1px solid #ddd;text-align:center;line-height:1.15;white-space:nowrap}
 .headline-table-light th{background:#f2f2f2;font-weight:600}
 .headline-table-light img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
-/* Figures right-align so they line up on the last digit; crests get only
-   the width they need. These positions come from HEADLINE_COLUMNS --
-   headline_indices() derives the same numbers, and a test holds the two
-   together, so reordering the sheet cannot silently misalign it.
-   1 day, 2 date, 3 time, 4 away crest, 5 away, 6 away QB, 7 rating,
-   8 spread, 9 model, 10 home QB, 11 rating, 12 home, 13 home crest,
-   14 diff, 15 picks, 16 O/U, 17 model, 18 diff, 19 picks. */
-.headline-table-light td:nth-child(3),.headline-table-light td:nth-child(7),
-.headline-table-light td:nth-child(8),.headline-table-light td:nth-child(9),
-.headline-table-light td:nth-child(11),.headline-table-light td:nth-child(14),
-.headline-table-light td:nth-child(16),.headline-table-light td:nth-child(17),
-.headline-table-light td:nth-child(18){text-align:right}
-.headline-table-light td:nth-child(1){text-align:left}
-.headline-table-light td:nth-child(4),.headline-table-light td:nth-child(13){padding:1px 2px;width:1%}
-.headline-table-light td:nth-child(7),.headline-table-light td:nth-child(11){color:#666;padding-left:1px;font-family:Graduate,Georgia,serif}
-.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(10){padding-right:2px}
-.headline-table-light td:nth-child(2){padding-left:2px;padding-right:3px}
 main.headline-shell{overflow-x:auto}
 .context-row{margin:12px 0}.context-value{font-size:12px;line-height:1.35;overflow-wrap:anywhere;color:#ccc}
 .context-value:last-child{text-align:right}.matchup-head{font-size:15px}
@@ -234,14 +217,6 @@ main.pkgpanel{box-sizing:border-box;width:100%;margin:0;padding:20px 0}
 .headline-table td,.headline-table th{text-align:center;line-height:1.15}
 .headline-table th{font-weight:600}
 .headline-table{width:auto}
-.headline-table td:nth-child(3),.headline-table td:nth-child(7),.headline-table td:nth-child(8),
-.headline-table td:nth-child(9),.headline-table td:nth-child(11),.headline-table td:nth-child(14),
-.headline-table td:nth-child(16),.headline-table td:nth-child(17),
-.headline-table td:nth-child(18){text-align:right}
-.headline-table td:nth-child(1){text-align:left}
-.headline-table td:nth-child(4),.headline-table td:nth-child(13){padding:1px 2px;width:1%}
-.headline-table td:nth-child(7),.headline-table td:nth-child(11){color:#8b97a3;padding-left:1px;font-family:Graduate,Georgia,serif}
-.headline-table td:nth-child(6),.headline-table td:nth-child(10){padding-right:2px}
 /* Stats tables size to their own content (3-6 columns of team/value data)
    instead of stretching full-width. */
 .stats-table{width:auto;max-width:100%}
@@ -295,12 +270,6 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 .headline-table tbody tr:hover,.stats-table tbody tr:hover{background:#1d2126}
 .headline-table img{height:16px;width:16px;object-fit:contain;vertical-align:middle}
 .stats-table img{height:20px;width:22px;object-fit:contain;vertical-align:middle}
-/* Team codes, at the same size as the figures beside them -- the picture
-   draws them that way and the page has to agree. This rule used to set
-   14px on positions 3 and 8, which were the team columns under the old
-   order and are now the kickoff time and the spread. */
-.headline-table td:nth-child(5),.headline-table td:nth-child(12),
-.headline-table-light td:nth-child(5),.headline-table-light td:nth-child(12){font-weight:600}
 /* The quarterbacks are reference, not numbers to compare -- quiet, a size
    down, with the rating tucked against the name it belongs to.
    Positions come from HEADLINE_COLUMNS (6 and 10 are the names, 7 and 11
@@ -309,10 +278,6 @@ table.stats-table{display:grid;width:max-content;max-width:none}
    had moved into positions 4 and 7 -- which set the away rating in Arial
    while the home rating stayed in the NFL font. `font:` shorthand is
    avoided here for that reason: it silently resets the family. */
-.headline-table td:nth-child(6),.headline-table td:nth-child(7),
-.headline-table td:nth-child(10),.headline-table td:nth-child(11),
-.headline-table-light td:nth-child(6),.headline-table-light td:nth-child(7),
-.headline-table-light td:nth-child(10),.headline-table-light td:nth-child(11){font-size:10.5px}
 .stats-table .rank{font-size:10px;line-height:1;color:#aab2bc;margin-left:6px}
 .stats-table td:first-child,.stats-table th:first-child{text-align:left}
 .sort-radio{display:none}
@@ -1849,13 +1814,16 @@ function copyPicksImage(event){
 # time each line up down the sheet instead of sliding around with the
 # length of the one before it; the QB's rating is split off his name for
 # the same reason. Neither split adds a header -- they read as one field.
+# Mirrored about the spread: each side reads quarterback, rating, crest,
+# team inwards towards the numbers, so the two teams sit either side of
+# the market line instead of the sheet running left to right.
 HEADLINE_COLUMNS = ['kick_day', 'kick_date', 'kick_time',
-                    'away_logo', 'away_team', 'away_qb', 'away_elo',
+                    'away_qb', 'away_elo', 'away_logo', 'away_team',
                     'spread', 'prediction',
-                    'home_qb', 'home_elo', 'home_team', 'home_logo',
+                    'home_team', 'home_logo', 'home_qb', 'home_elo',
                     'diff', 'pick', 'total', 'total_prediction', 'total_diff', 'total_pick']
-HEADLINE_LABELS = ['Kickoff', '', 'ET', '', 'Away', 'QB', 'Elo', 'Spread', 'Model',
-                   'QB', 'Elo', 'Home', '', 'Diff', 'Picks', 'O/U', 'Model', 'Diff', 'Picks']
+HEADLINE_LABELS = ['Kickoff', '', 'ET', 'QB', 'Elo', '', 'Away', 'Spread', 'Model',
+                   'Home', '', 'QB', 'Elo', 'Diff', 'Picks', 'O/U', 'Model', 'Diff', 'Picks']
 # Figures line up on their last digit; everything else stays centred.
 HEADLINE_RIGHT = {'kick_time', 'away_elo', 'home_elo', 'spread', 'prediction',
                   'diff', 'total', 'total_prediction', 'total_diff'}
@@ -1865,14 +1833,59 @@ HEADLINE_RIGHT = {'kick_time', 'away_elo', 'home_elo', 'spread', 'prediction',
 HEADLINE_SMALL = {'away_qb', 'home_qb', 'away_elo', 'home_elo'}
 # Just wide enough for a 16px crest.
 HEADLINE_TIGHT = {'away_logo', 'home_logo'}
+# The kickoff day reads as a label, not a figure.
+HEADLINE_LEFT = {'kick_day'}
+# Team codes carry the row; the picks highlight lands on them.
+HEADLINE_BOLD = {'away_team', 'home_team'}
+# A rating tucks against the quarterback it belongs to.
+HEADLINE_QB = {'away_qb', 'home_qb'}
 # What a row says when no bucket covers it -- a dash, not a word, so the
 # eye skips it and the picks are what stand out (see NO_PICK).
 PASS_MARK = '–'
 
 
+def headline_style():
+    """The position-keyed half of the sheet's CSS, generated from
+    HEADLINE_COLUMNS.
+
+    Written by hand, these rules went stale every time the sheet was
+    reordered, and silently: a block meant for "the two quarterback
+    columns" kept styling positions 4 and 7 after those became the away
+    crest and the away rating, which is how one rating ended up in Arial
+    while the other stayed in the NFL font. Generating them means the
+    column order is stated once and the stylesheet follows it.
+
+    Both themes get identical geometry; only the rating's colour differs,
+    because the page is dark and the picture is light."""
+    def group(css_class, names, body):
+        if not names:
+            return ''
+        selectors = ','.join(f'.{css_class} td:nth-child({i})' for i in headline_indices(names))
+        return f'{selectors}{{{body}}}\n'
+
+    rules = ''
+    for css_class, rating_colour in (('headline-table', '#8b97a3'), ('headline-table-light', '#666')):
+        # Figures line up on their last digit; the day reads as a label.
+        rules += group(css_class, HEADLINE_RIGHT, 'text-align:right')
+        rules += group(css_class, HEADLINE_LEFT, 'text-align:left')
+        # A crest column is worth exactly one crest.
+        rules += group(css_class, HEADLINE_TIGHT, 'padding:1px 2px;width:1%')
+        # The quarterback and his rating read as one field, a size down.
+        rules += group(css_class, HEADLINE_SMALL, 'font-size:10.5px')
+        rules += group(css_class, HEADLINE_QB, 'padding-right:2px')
+        rules += group(css_class, {'away_elo', 'home_elo'},
+                       f'color:{rating_colour};padding-left:1px;font-family:Graduate,Georgia,serif')
+        rules += group(css_class, HEADLINE_BOLD, 'font-weight:600')
+        rules += group(css_class, {'kick_date'}, 'padding-left:2px;padding-right:3px')
+    return rules
+
+
 def headline_indices(names, base=1):
     """Which column positions a set of column names occupies."""
     return [i + base for i, column in enumerate(HEADLINE_COLUMNS) if column in names]
+
+
+STYLE += headline_style()
 
 
 def headline_table(folder, light=False, guide=True):
