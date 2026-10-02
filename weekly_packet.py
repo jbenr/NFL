@@ -243,6 +243,7 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 /* The dash entry: an empty outline, because it marks the absence of a pick. */
 .tier-swatch-none{border:1px solid #6b7480;background:transparent}
 .tier-note{color:#8e99a5;flex-basis:100%;text-align:right}
+.tier-gap{border-left:3px solid #6b7480;padding:6px 12px;margin:8px 0;font:12px Arial,sans-serif;color:#b7c0c9}
 @media(max-width:650px){.tier-legend{align-items:flex-start;text-align:left}}
 /* The expandable key under the sheet (tier_guide). */
 .tier-guide{margin:10px 0 0;font:12px/1.5 Arial,sans-serif;color:#c8cdd3}
@@ -1301,7 +1302,10 @@ SOLVED_MODEL = 'Model 2.0 · solved'
 # of week 13+ games, which is where the spread edge switches on.
 LEVERAGE = 0.70
 TIER_SOURCE = f'{TIER_MODEL}, 20-week lookback, 2010-2025 backtest: 4363 games'
-TIER_BANDS = [('S', .600), ('A', .575), ('B', .540)]
+# Measured hit-rate floors. C is the new bottom rung: it clears break-even
+# at -110 (52.38%) but not by much, so it is a bet rather than a lean and
+# the sheet says so by colour. Anything under C is not a pick at all.
+TIER_BANDS = [('S', .610), ('A', .580), ('B', .550), ('C', .524)]
 DEAD_TOTAL = (42.0, 46.0)
 PICK_BUCKETS = {
     'spread': dict(edge=2.0, buckets=[
@@ -1310,6 +1314,7 @@ PICK_BUCKETS = {
              test=lambda week, importance, sd, line, edge: (week >= 13 and importance is not None
                                                             and pd.notna(importance) and importance >= LEVERAGE),
              model=TIER_MODEL, rate=.607, n=252, worth='+2.5u a season on ~16 picks, up 12 of 16 years',
+             frequency=f'16 a season · about 1.6 a week across the 10 weeks it can fire',
              eras='59 / 58 / 59 / 65%',
              siblings='carryover 60.1%, steep 59.1%, 2.1-importance 60.2%',
              note='Playoff leverage, not the ensemble\'s own confidence, is what separates a December spread '
@@ -1326,6 +1331,7 @@ PICK_BUCKETS = {
                                                             and abs(edge) >= 4
                                                             and sd is not None and sd <= 4.0),
              model=SOLVED_MODEL, rate=.585, n=200, worth='+1.8u a season on ~15 picks, up 10 of 13 years',
+             frequency=f'15 a season · about 3.1 a week across the 5 weeks it can fire',
              eras='55 / 60 / 65 / 56%',
              siblings='not yet measured on other runs',
              note='The first spread edge before week 13, and it came from fixing an input rather than '
@@ -1351,6 +1357,7 @@ PICK_BUCKETS = {
              test=lambda week, importance, sd, line, edge: (week >= 9 and not dead_total(line)
                                                             and (sd is None or sd <= 4.0)),
              model=TIER_MODEL, rate=.683, n=145, worth='+2.8u a season on ~9 picks, up 12 of 16 years',
+             frequency=f'9 a season · about 0.6 a week across the 14 weeks it can fire',
              eras='67 / 65 / 71 / 68%',
              siblings='carryover 61.8%, steep 62.8%, 2.1-importance 67.7% (n=31), 2.2-travel 66.4%',
              note='The best bucket on the board and the flattest -- no era below 65%, halves 66/69%. What it '
@@ -1360,6 +1367,7 @@ PICK_BUCKETS = {
              test=lambda week, importance, sd, line, edge: (week <= 12 and edge is not None
                                                             and abs(edge) >= 8 and (sd is None or sd <= 4.5)),
              model=TIER_MODEL, rate=.634, n=101, worth='+1.3u a season on ~6 picks, up 11 of 16 years',
+             frequency=f'6 a season · about 0.5 a week across the 12 weeks it can fire',
              eras='– / 70 / 71 / 54%',
              siblings='carryover 58.0%, steep 55.4%, 2.1-importance 52.5% (n=40), 2.2-travel 59.0%',
              note='The one thing that works before week 9: not a better read on ordinary games, but the rare '
@@ -1369,6 +1377,7 @@ PICK_BUCKETS = {
         dict(rule='weeks 5-8, posted total outside 42-46',
              test=lambda week, importance, sd, line, edge: 5 <= week <= 8 and not dead_total(line),
              model=TIER_MODEL, rate=.603, n=136, worth='+1.3u a season on ~9 picks, up 9 of 16 years',
+             frequency=f'8 a season · about 2.1 a week across the 4 weeks it can fire',
              eras='55 / 60 / 61 / 65%',
              siblings='carryover 60.0%, steep 51.5%, 2.1-importance 53.8%, 2.2-travel 60.6%',
              note='The model’s edge in the stretch the spread side cannot touch at all. The carryover and '
@@ -1377,6 +1386,7 @@ PICK_BUCKETS = {
         dict(rule='week 9 on, posted total outside 42-46, ensemble SD above 4.0',
              test=lambda week, importance, sd, line, edge: week >= 9 and not dead_total(line),
              model=TIER_MODEL, rate=.543, n=258, worth='+0.6u a season on ~16 picks, up 10 of 16 years',
+             frequency=f'16 a season · about 1.2 a week across the 14 weeks it can fire',
              eras='58 / 53 / 49 / 57%',
              siblings='carryover 56.0%, steep 55.4%, 2.1-importance 52.3%, 2.2-travel 54.7%',
              note='The other half of the SD split, kept rather than dropped because it holds on every run, '
@@ -1412,8 +1422,11 @@ NO_PICK = {
                        'lookback is mostly last season and only a huge disagreement means anything, and the '
                        '42-46 band, where this model is wrong in every era.')
 }
-TIER_COLORS = {'S': '#e3c4ff', 'A': '#b9e4c4', 'B': '#ffe590'}
-BAND_LABELS = {'S': '60%+', 'A': '57.5-60%', 'B': '54-57.5%'}
+# S regal purple, A green, B light yellow, C light orange. B and C are
+# the close pair -- a light yellow and a light orange sit about 20 degrees
+# apart, so C is pushed as far toward orange as 'light' allows.
+TIER_COLORS = {'S': '#d9b3ff', 'A': '#b9e4c4', 'B': '#fff2b8', 'C': '#ffcb99'}
+BAND_LABELS = {'S': '61%+', 'A': '58-61%', 'B': '55-58%', 'C': '52.4-55%'}
 
 
 def dead_total(line):
@@ -1502,16 +1515,17 @@ def tier_guide(running=None, standalone=False):
                      f'<td class="tier-record">{escape(bucket["model"])}</td>'
                      f'<td class="tier-record">{100 * bucket["rate"]:.1f}% of {bucket["n"]} picks</td>'
                      f'<td class="tier-record">{escape(bucket["worth"])}</td>'
+                     f'<td class="tier-record">{escape(bucket.get("frequency", "—"))}</td>'
                      f'<td class="tier-record">{escape(bucket["eras"])}</td>'
                      f'<td class="tier-record">{escape(bucket["siblings"])}</td></tr>'
-                     f'<tr class="tier-note-row"><td></td><td colspan="6">{escape(bucket["note"])}</td></tr>')
+                     f'<tr class="tier-note-row"><td></td><td colspan="7">{escape(bucket["note"])}</td></tr>')
         skip = NO_PICK[market]
         rows += (f'<tr><td><span class="tier-chip tier-chip-none">–</span></td>'
                  f'<td>{escape(skip["rule"])}</td><td class="tier-record">{escape(skip["model"])}</td>'
                  f'<td class="tier-record">{escape(skip["record"])}</td>'
-                 f'<td class="tier-record">{escape(skip["worth"])}</td>'
+                 f'<td class="tier-record">{escape(skip["worth"])}</td><td class="tier-record">—</td>'
                  f'<td class="tier-record">{escape(skip["eras"])}</td><td class="tier-record">—</td></tr>'
-                 f'<tr class="tier-note-row"><td></td><td colspan="6">{escape(skip["note"])}</td></tr>')
+                 f'<tr class="tier-note-row"><td></td><td colspan="7">{escape(skip["note"])}</td></tr>')
         sections.append(
             f'<h4>{escape(serves.title())} picks · {escape(owner)}'
             + ('' if live else ' <em>(not the model behind this column — shown for reference, '
@@ -1519,13 +1533,24 @@ def tier_guide(running=None, standalone=False):
             f'<p class="tier-qualify">A pick needs the model to disagree with the market by at least '
             f'{spec["edge"]:g} points, and to land in one of these buckets.</p>'
             '<table class="tier-table"><thead><tr><th></th><th>Bucket</th><th>Model</th><th>Measured</th>'
-            '<th>Worth</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
+            '<th>Worth</th><th>How often</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
             + rows + '</tbody></table>')
+    gaps = ('<p class="tier-gap">Spreads have no bucket in weeks 6-12, and that is a finding rather '
+            'than an oversight. Five independent searches have looked: an exhaustive hit-rate grid, an '
+            'error-surface search over the same dimensions, the same search with absolute rather than '
+            'percentile cuts, a nine-arm sweep of the sided-spread architecture, and a gate-first search '
+            'that added the size of the posted line. Three cells in all of that cleared the era and '
+            'halves gates, and all three fell apart on a second model (worst sibling 47-51%) while '
+            'paying about half a unit a season. The pattern fits: weeks 1-3 are exploitable because the '
+            'model is carrying stale priors, week 13 on because playoff leverage distorts what teams are '
+            'playing for, and weeks 6-12 is the stretch where the model has plenty of information and so '
+            'does the market. The one thing that has ever opened a closed window here was changing the '
+            'model, not filtering it harder. Totals are covered in every week.</p>')
     bands = ', '.join(f'{tier} = {BAND_LABELS[tier]}' for tier, _ in TIER_BANDS)
     bottom = ('<p class="tier-note">All six buckets together: about 59 picks a season for +7.6 units at one '
               'unit a bet, up in 15 of the 16 backtested seasons (worst -4.0u in 2014, best +18.2u in 2023). '
               'The two S buckets in weeks 13-14 and the playoffs are half of that on a quarter of the picks, '
-              'and the two B buckets are 14% of it. A bucket only pays what its hit rate earns times how '
+              'and the thinnest bucket is 8% of it. A bucket only pays what its hit rate earns times how '
               'often it fires, so a high rate on few games is worth less than it looks.</p>')
     # Only worth warning about when a column's model has no buckets of its
     # own: then the rates on show were measured on something else entirely.
@@ -1541,9 +1566,9 @@ def tier_guide(running=None, standalone=False):
                            if standalone else
                            ('<details class="tier-guide"><summary>What the pick colours mean</summary>',
                             '</details>'))
-    return (open_tag + mismatch
+    return (open_tag + mismatch + gaps
             + f'<p class="tier-qualify">The letter is the bucket’s measured hit rate, not a judgement: '
-            f'{bands}, and under 54% is no pick at all.</p>'
+            f'{bands}, and under {100 * TIER_BANDS[-1][1]:g}% is no pick at all.</p>'
             + ''.join(sections) + bottom
             + f'<p class="tier-note">Every rate is measured on the {escape(TIER_SOURCE)} — the run this packet '
               'builds — and nothing is averaged across models. "Other runs" is the same bucket on the carryover, '
@@ -1587,7 +1612,8 @@ def tier_legend(markets=('spread', 'total')):
     # sheet they were a paragraph of footnote between the reader and the
     # picks; the swatches alone say what the colours mean.
     return (f'<div class="tier-legend"><strong>Hit rate</strong>{items}'
-            '<span class="tier-key"><i class="tier-swatch-none"></i>– under 54%, no bet</span></div>')
+            f'<span class="tier-key"><i class="tier-swatch-none"></i>– under '
+            f'{100 * TIER_BANDS[-1][1]:g}%, no bet</span></div>')
 
 
 def copy_picks_widget(season, week, light_table):
@@ -1608,7 +1634,7 @@ def copy_picks_widget(season, week, light_table):
     # itself it was a line of machinery above the thing you came to read.
     subtitle = f'{int(season)} Week {int(week)}'
     legend = [(TIER_COLORS[tier], f'{tier}  hit rate {BAND_LABELS[tier]}') for tier, _ in TIER_BANDS]
-    legend.append(('#ffffff', '–  under 54%, no bet'))
+    legend.append(('#ffffff', f'–  under {100 * TIER_BANDS[-1][1]:g}%, no bet'))
     png, width = picks_png(light_table, 'Model', subtitle, legend=legend)
     return ('<input type="checkbox" id="copy-picks-toggle" class="copy-toggle">'
            '<div class="copy-picks"><label for="copy-picks-toggle" class="copy-btn" onclick="copyPicksImage(event)">'

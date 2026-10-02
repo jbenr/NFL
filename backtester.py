@@ -766,7 +766,8 @@ if __name__ == '__main__':
                         # 'mean' and 'median' are not decay curves, so they are not in
                         # DECAY_PRESETS -- but calc_stats has always accepted them and
                         # 'mean' is the flat baseline the curves are judged against.
-                        choices=['mean', 'median', *dc.DECAY_PRESETS], default=None,
+                        choices=['mean', 'median', *dc.DECAY_PRESETS, *dc.ADJUSTED_PRESETS],
+                        default=None,
                         help="Stat recency preset. Default: whatever the model version uses ('weighted' for "
                              "model_2.0, 'steep' for legacy). 'carryover' is 'weighted' with games from an "
                              "earlier season counted half -- the September-staleness experiment. 'solved' is "

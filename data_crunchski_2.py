@@ -413,6 +413,81 @@ def _ratios_from_ingredients(ing, side):
 # within 0.0002 R2 of the best in both.
 SOLVED_PRIOR_RATIO = 0.40
 
+# Opponent-adjusted calculations. Not decay curves, so not in
+# DECAY_PRESETS: instead of pooling a window into an average, they fit
+# every team's offence and defence simultaneously (opponent_adjust) and
+# take each team's own coefficient. A team is then described by how good
+# it is rather than by what it averaged against whoever it happened to
+# play.
+#
+#   prior_games  how much evidence earns half your measured effect --
+#                the ridge penalty, in games. It also resolves an
+#                identifiability problem: mu + offence + defence is
+#                unchanged by shifting every offence up and every defence
+#                down, so the unpenalised fit has no unique answer.
+#   recency      a DECAY_PRESETS curve folded into the fit weights, so
+#                recent football counts for more. 'gradual' is the gentle
+#                one -- 1.00 to about 0.51 across a season.
+# Built only for the offence in _ratios_from_ingredients: a defence does
+# not have a run/pass split or a share of the clock, it faces one.
+OFFENCE_ONLY = {'run_%', 'pass_%', 'possession_%'}
+
+ADJUSTED_PRESETS = {
+    'adjusted_1.0': dict(prior_games=20., recency='gradual'),
+}
+
+
+def _adjusted_stats(df, off_ing, calculation, game_dates):
+    """Opponent-adjusted offence and defence tables for one window.
+
+    One fit does both sides. Each row is a team's offensive output in one
+    game against a named opponent, so the fitted offence coefficients say
+    what a team produces and the defence coefficients say what it allows
+    -- the same pair the pooled path returns, differing only in that
+    schedule has been taken out of them.
+
+    Weights are volume times recency: a 40-carry game says more about a
+    rushing offence than a 12-carry one, and a game from last November
+    says less than one from last week."""
+    import opponent_adjust as oa
+    settings = ADJUSTED_PRESETS[calculation]
+    ratios = _ratios_from_ingredients(off_ing, 'posteam')
+    frame = ratios.join(off_ing[[c for c in off_ing.columns if c.startswith('_')]])
+    frame = frame.reset_index()
+
+    pairs = df.groupby(['game_id', 'posteam']).agg(opponent=('defteam', 'first'),
+                                                   home=('home_team', 'first'))
+    frame = frame.join(pairs, on=['game_id', 'team'])
+    frame['is_home'] = (frame.team == frame.home).astype(int)
+    frame = frame.dropna(subset=['opponent'])
+
+    # Recency folded into the weights rather than applied to the values:
+    # the fit is weighted least squares, so down-weighting an old game is
+    # exactly saying it carries less evidence.
+    if settings.get('recency') and game_dates is not None:
+        dates = frame['game_id'].map(game_dates)
+        days = (dates.max() - dates).dt.days.to_numpy()
+        recency = gradual_acceleration_with_floor(days, **DECAY_PRESETS[settings['recency']])
+        recency = recency / recency.max()
+    else:
+        recency = np.ones(len(frame))
+    for column in [c for c in frame.columns if c.startswith('_')]:
+        frame[column] = frame[column].to_numpy(dtype=float) * recency
+
+    metrics = [c for c in ratios.columns]
+    offence, defence = oa.ratings(frame, metrics, weight=None,
+                                  prior_games=settings['prior_games'])
+    # The defence table is fitted on the offensive metric, so it arrives
+    # named off_*; it describes what the team allows, which is what the
+    # def_* columns mean. Usage rate and time of possession are choices an
+    # offence makes, not things a defence allows -- _ratios_from_ingredients
+    # only builds them for posteam, so the defence side drops them rather
+    # than inventing a def_run_% the rest of the model has never had.
+    defence = defence.drop(columns=[c for c in defence.columns
+                                    if c.replace('off_', '', 1) in OFFENCE_ONLY])
+    defence.columns = [c.replace('off_', 'def_', 1) for c in defence.columns]
+    return offence, defence
+
 
 def _season_of(frame, dates):
     """The season each game belongs to. nflverse game ids start with it
@@ -467,10 +542,17 @@ def _pool_ingredients(ingredients, game_dates, calculation):
 
 
 def calc_stats(df):
-    if RATE_MODE not in ['mean', 'median', *DECAY_PRESETS]:
-        raise ValueError(f"RATE_MODE must be one of ['mean', 'median', {', '.join(DECAY_PRESETS)}], got {RATE_MODE!r}")
+    if RATE_MODE not in ['mean', 'median', *DECAY_PRESETS, *ADJUSTED_PRESETS]:
+        raise ValueError(f"RATE_MODE must be one of ['mean', 'median', "
+                         f"{', '.join([*DECAY_PRESETS, *ADJUSTED_PRESETS])}], got {RATE_MODE!r}")
     off_ing, def_ing = _per_game_ingredients(df)
-    if RATE_MODE == 'median':
+    if RATE_MODE in ADJUSTED_PRESETS:
+        # Needs game dates for the recency weights, and the raw plays to
+        # name each game's opponent -- neither of which the pooled path
+        # asks for.
+        dates = pd.to_datetime(df.groupby('game_id')['game_date'].first(), cache=False)
+        off, dee = _adjusted_stats(df, off_ing, RATE_MODE, dates)
+    elif RATE_MODE == 'median':
         off = _ratios_from_ingredients(off_ing, 'posteam').groupby(level='team').median()
         dee = _ratios_from_ingredients(def_ing, 'defteam').groupby(level='team').median()
         # run_ypp/pass_ypp: a true per-play median (continuous stat, unlike

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -68,8 +69,9 @@ class BacktesterAcceptsThem(unittest.TestCase):
         but calc_stats has always taken them and the flat one is the
         baseline the curves are judged against."""
         import backtester
-        source = open('backtester.py', encoding='utf-8').read()
-        self.assertIn("choices=['mean', 'median', *dc.DECAY_PRESETS]", source)
+        source = Path('backtester.py').read_text(encoding='utf-8')
+        self.assertIn("'mean', 'median', *dc.DECAY_PRESETS", source,
+                      'the flat and median modes are not offered on the command line')
         self.assertIn('calculation', backtester.SWEEPABLE)
 
 

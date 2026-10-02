@@ -7,6 +7,20 @@ import pandas as pd
 import weekly_packet as wp
 
 
+def tier_for(market, week, **conditions):
+    """The letter the installed bucket's own measured rate earns.
+
+    Written out by hand these tests pinned 'S' to rates that a change of
+    tier bands moves -- the letters are derived from TIER_BANDS, so the
+    expectation has to be derived too, or every retier is a test failure
+    that says nothing."""
+    bucket = wp.pick_bucket(market, week, **conditions)
+    return wp.tier_band(bucket['rate']) if bucket else None
+
+
+SPREAD_TIER = wp.tier_band(wp.PICK_BUCKETS['spread']['buckets'][0]['rate'])
+
+
 def settled(**overrides):
     """One settled row, as apply_tiers receives it."""
     row = dict(season=2025, week=3, market_base=-3.5, prediction=-8., edge=-4.5, variance=16.,
@@ -25,14 +39,17 @@ class TierTests(unittest.TestCase):
         self.assertIsNone(wp.pick_tier('total', week=10, line=44.))   # the 42-46 dead band
 
     def test_the_windows_that_do_earn_a_tier(self):
-        self.assertEqual(wp.pick_tier('spread', week=13, importance=.75), 'S')
-        self.assertEqual(wp.pick_tier('spread', week=17, importance=.9), 'S')   # covers weeks 15-18
-        self.assertEqual(wp.pick_tier('spread', week=20, importance=1.), 'S')
-        self.assertEqual(wp.pick_tier('total', week=13, line=50.), 'S')   # 64.6%
-        self.assertEqual(wp.pick_tier('total', week=8, line=50.), 'S')    # 60.0%
-        self.assertEqual(wp.pick_tier('total', week=10, sd=3.5, line=50.), 'S')   # 68.3%, ensemble agrees
-        self.assertEqual(wp.pick_tier('total', week=10, sd=5., line=50.), 'B')    # 55.2%, it does not
-        self.assertEqual(wp.pick_tier('total', week=16, sd=5., line=50.), 'B')
+        self.assertEqual(wp.pick_tier('spread', week=13, importance=.75), SPREAD_TIER)
+        self.assertEqual(wp.pick_tier('spread', week=17, importance=.9), SPREAD_TIER)  # weeks 15-18
+        self.assertEqual(wp.pick_tier('spread', week=20, importance=1.), SPREAD_TIER)
+        self.assertEqual(wp.pick_tier('total', week=13, line=50.), tier_for('total', 13, line=50.))
+        self.assertEqual(wp.pick_tier('total', week=8, line=50.), tier_for('total', 8, line=50.))
+        self.assertEqual(wp.pick_tier('total', week=10, sd=3.5, line=50.), 
+                         tier_for('total', 10, sd=3.5, line=50.))  # ensemble agrees
+        self.assertEqual(wp.pick_tier('total', week=10, sd=5., line=50.),
+                         tier_for('total', 10, sd=5., line=50.))  # the ensemble does not agree
+        self.assertEqual(wp.pick_tier('total', week=16, sd=5., line=50.),
+                         tier_for('total', 16, sd=5., line=50.))
 
     def test_a_tierless_game_is_not_a_pick_however_big_the_edge(self):
         """A catch-all tier used to make every qualifying disagreement a
@@ -41,7 +58,7 @@ class TierTests(unittest.TestCase):
         self.assertIsNone(early.tier.iloc[0])
         self.assertFalse(bool(early.qualifies.iloc[0]))
         late = wp.apply_tiers(settled(week=13, edge=-9., total_game_importance=.95), 'spread')
-        self.assertEqual(late.tier.iloc[0], 'S')
+        self.assertEqual(late.tier.iloc[0], SPREAD_TIER)
         self.assertTrue(bool(late.qualifies.iloc[0]))
 
     def test_a_late_game_nobody_needs_to_win_is_not_a_pick(self):
@@ -90,19 +107,20 @@ class TierTests(unittest.TestCase):
         on the model it was measured on, and describes nothing on a different
         architecture. A model with no buckets of its own gets no picks."""
         late = dict(market='spread', week=14, importance=.8, sd=4., line=-3., edge=4.)
-        self.assertEqual(wp.pick_tier(**late), 'S')
-        self.assertEqual(wp.pick_tier(**late, running=wp.TIER_MODEL), 'S')
+        self.assertEqual(wp.pick_tier(**late), SPREAD_TIER)
+        self.assertEqual(wp.pick_tier(**late, running=wp.TIER_MODEL), SPREAD_TIER)
         self.assertIsNone(wp.pick_tier(**late, running=wp.SHARED_MODEL))
         for week in [3, 8, 14]:
             self.assertIsNone(wp.pick_tier('spread', week, importance=.8, sd=1.5, line=-3., edge=4.,
                                            running=wp.SHARED_MODEL))
 
     def test_the_letter_follows_the_measured_rate(self):
-        self.assertEqual(wp.tier_band(.64), 'S')
-        self.assertEqual(wp.tier_band(.60), 'S')
+        self.assertEqual(wp.tier_band(wp.TIER_BANDS[0][1] + .03), 'S')
+        self.assertEqual(wp.tier_band(wp.TIER_BANDS[0][1]), 'S')
         self.assertEqual(wp.tier_band(.58), 'A')
-        self.assertEqual(wp.tier_band(.549), 'B')
-        self.assertIsNone(wp.tier_band(.539))
+        self.assertEqual(wp.tier_band(dict(wp.TIER_BANDS)['B'] + .001), 'B')
+        # Below the bottom band is no pick at all, whatever that band is set to.
+        self.assertIsNone(wp.tier_band(wp.TIER_BANDS[-1][1] - .001))
         self.assertIsNone(wp.tier_band(.50))
 
 

@@ -3,6 +3,7 @@ import inspect
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -396,16 +397,47 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
     lookback, train_window, calc = primary['lookback'], primary['train_window'], primary['calculation']
     print(f'{model_spec.LABEL} · code {model_spec.code_version()} · {season} week {week} '
           f'-> {model_spec.run_folder(season, week, lookback)}', flush=True)
-    sched = pd.read_parquet('data/sched.parquet')
+    sched_path = Path('data/sched.parquet')
+    sched = pd.read_parquet(sched_path)
     prior = (sched.season < season) | ((sched.season == season) & (sched.week < week))
     stale = sched.loc[prior & sched.away_score.isna()]
+    # Two separate reasons to refresh, and only the first used to be checked.
+    #   results: a prior game with no score is a stale file, not a game still
+    #            in progress -- and this week's stats are built from it.
+    #   lines:   spread_line and total_line live in the same file and move
+    #            every day. Every pick's edge is measured against them, so a
+    #            schedule pulled yesterday prices this week's slate wrongly
+    #            even when every past result is present.
+    age_hours = (time.time() - sched_path.stat().st_mtime) / 3600 if sched_path.exists() else 1e9
+    target_missing = sched[(sched.season == season) & (sched.week == week)].empty
+    reasons = []
     if not stale.empty:
-        stale_seasons = sorted(stale.season.unique().tolist())
-        print(f'{len(stale)} prior game(s) in data/sched.parquet missing a score (season(s) {stale_seasons}) -- '
-             'this should already be final, so refreshing schedule + play-by-play before continuing...', flush=True)
+        reasons.append(f'{len(stale)} prior game(s) missing a score')
+    if age_hours > 6:
+        reasons.append(f'the schedule is {age_hours:.0f}h old and the lines move daily')
+    if target_missing:
+        reasons.append(f'{season} wk{week} is not in the schedule at all')
+    if reasons:
+        seasons_to_pull = sorted(set(stale.season.unique().tolist()) | {season})
+        print(f'Refreshing schedule + play-by-play ({"; ".join(reasons)})...', flush=True)
         import data_pullson
-        data_pullson.pull_sched(stale_seasons)
-        data_pullson.pull_pbp(stale_seasons)
+        data_pullson.pull_sched(seasons_to_pull)
+        data_pullson.pull_pbp(seasons_to_pull)
+        sched = pd.read_parquet(sched_path)
+    # Always, even when nothing above needed pulling: the schedule's
+    # quarterback for an unplayed game is nflverse's projection from the
+    # last known starter, so it lags benchings and injuries by days. The
+    # starter's rating is a model input, so a stale name feeds the wrong QB
+    # Elo into the prediction -- in 2026 week 4 it had Chicago starting
+    # Case Keenum rather than Caleb Williams.
+    try:
+        import data_pullson
+        sched = data_pullson.refresh_starters([season], str(sched_path))
+    except Exception as starter_error:
+        # Never fatal: a stale starter is worse than a fresh one but far
+        # better than no packet.
+        print(f'  could not refresh starters from the depth chart ({starter_error}); '
+              'using the schedule as it stands', flush=True)
     weather_file = Path(weather_file or 'data/weather/historical_features.parquet')
     if not weather_file.exists():
         raise ValueError(f'Missing historical weather: {weather_file}')
@@ -455,8 +487,16 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
         forecast_file = Path(forecast_file or 'data/weather/forecasts.parquet')
         forecast_failure = None
         try:
-            games = pull_weather.scheduled_games(season, week, 'live', decision_hours=24)
-            pull_args = SimpleNamespace(mode='live', decision_hours=24, publication_hours=8,
+            # decision_hours=0, not 24. The cutoff models "the forecast as it
+            # stood when I would have placed the bet", which is right for a
+            # backtest and wrong here: it skips any game kicking off within a
+            # day, and such a game has no other source either -- it has not
+            # been played, so reanalysis cannot reach it. A Thursday night
+            # game built on Thursday morning fell straight through that gap
+            # and failed the whole packet. Zero means "every game that has
+            # not kicked off yet", which is exactly what a live build wants.
+            games = pull_weather.scheduled_games(season, week, 'live', decision_hours=0)
+            pull_args = SimpleNamespace(mode='live', decision_hours=0, publication_hours=8,
                                         output=str(forecast_file), cache_dir='data/cache/open_meteo', refresh=False)
             pull_weather.pull(games, pull_args)
         except Exception as pull_error:      # the reanalysis pass below may still cover it

@@ -6,6 +6,7 @@ import json
 from io import StringIO
 from bs4 import BeautifulSoup
 from tabulate import tabulate
+import utils
 
 def pull_sched(szns):
     if not os.path.exists('data'): os.makedirs('data')
@@ -130,3 +131,119 @@ def pull_odds():
         print('odds-api Used requests', odds_response.headers['x-requests-used'])
 
         return df
+
+
+# Report statuses that mean a quarterback will not start. 'Questionable'
+# is deliberately absent: most questionable quarterbacks play.
+OUT_STATUSES = {'Out', 'Doubtful'}
+# Missing practice entirely is the strongest live signal before the official
+# designation is published. It is a proxy, not a ruling -- a veteran can be
+# rested on a Wednesday -- but on the Thursday of a game week it is the only
+# thing the feed carries, and it is right far more often than it is wrong.
+OUT_PRACTICE = {'Did Not Participate In Practice'}
+
+
+def quarterback_status(seasons):
+    """(team, week) -> ordered list of (name, why_not) for that team's
+    quarterbacks, best first.
+
+    `why_not` is None for an available quarterback and a short reason for
+    one who will not start, so a caller can walk down the depth chart and
+    say which names it skipped.
+
+    Two sources, because neither is sufficient alone. The depth chart says
+    who the team designates, which is stale the moment somebody is ruled
+    out. The injury report says who is unavailable, which is published
+    through the week -- the official report_status lands on the Friday, so
+    a Thursday build has only practice participation to go on."""
+    import nfl_data_py as nfl
+    seasons = list(seasons)
+    charts = nfl.import_depth_charts(seasons)
+    charts['dt'] = pd.to_datetime(charts.dt, errors='coerce')
+    ones = charts[(charts.pos_abb == 'QB')].dropna(subset=['dt'])
+    if ones.empty:
+        return {}
+    # The newest chart per team, then that chart's own ranking.
+    newest_dt = ones.groupby('team').dt.transform('max')
+    current = ones[ones.dt == newest_dt].sort_values(['team', 'pos_rank'])
+
+    try:
+        injuries = nfl.import_injuries(seasons)
+    except Exception:
+        injuries = pd.DataFrame(columns=['team', 'week', 'full_name', 'report_status', 'practice_status'])
+
+    def reason(team, week, name):
+        rows = injuries[(injuries.team == team) & (injuries.week == week)
+                        & (injuries.full_name == name)]
+        if rows.empty:
+            return None
+        row = rows.iloc[-1]
+        if row.get('report_status') in OUT_STATUSES:
+            return str(row['report_status']).lower()
+        if pd.isna(row.get('report_status')) and row.get('practice_status') in OUT_PRACTICE:
+            return 'did not practise'
+        return None
+
+    weeks = sorted(injuries.week.dropna().unique().tolist()) or [None]
+    out = {}
+    for team, group in current.groupby('team'):
+        names = group.player_name.tolist()
+        for week in weeks:
+            out[(team, int(week))] = [(n, reason(team, int(week), n)) for n in names]
+    return out
+
+
+def refresh_starters(seasons, schedule_path='data/sched.parquet'):
+    """Update the schedule's designated starter for unplayed games, using
+    the depth chart filtered by the injury report.
+
+    The depth chart alone is NOT enough, and getting this wrong is worse
+    than leaving it alone. nflverse's own away_qb_name/home_qb_name for an
+    upcoming game already accounts for injuries -- in 2026 week 4 it had
+    Chicago starting Case Keenum and Tampa starting Jalon Daniels because
+    Caleb Williams and Baker Mayfield were out. The raw depth chart still
+    listed both as QB1, so overwriting the schedule with it replaced two
+    correct names with two wrong ones.
+
+    What the schedule does get wrong is the other direction: a starter
+    returning from injury. It carries the last man to actually start, so
+    Seattle showed Drew Lock for a week 4 that Sam Darnold was back for.
+
+    So: walk the depth chart in order and take the first quarterback the
+    injury report does not rule out, and only overwrite when that
+    disagrees with the schedule. A finished game is never touched -- it
+    records who actually played."""
+    sched = pd.read_parquet(schedule_path)
+    try:
+        rooms = quarterback_status(seasons)
+    except Exception as error:
+        print(f'  could not read depth charts/injuries ({error}); leaving starters alone', flush=True)
+        return sched
+    if not rooms:
+        return sched
+    unplayed = sched.away_score.isna()
+    changes = []
+    for side in ('away', 'home'):
+        column = f'{side}_qb_name'
+        if column not in sched.columns:
+            continue
+        for row in sched.index[unplayed]:
+            team, week = sched.at[row, f'{side}_team'], int(sched.at[row, 'week'])
+            room = rooms.get((team, week))
+            if not room:
+                continue
+            available = next((n for n, why in room if not why), None)
+            ruled_out = [f'{n} ({why})' for n, why in room if why]
+            if available and available != sched.at[row, column]:
+                changes.append((sched.at[row, 'game_id'], team, sched.at[row, column],
+                                available, '; '.join(ruled_out)))
+                sched.at[row, column] = available
+    if changes:
+        print(f'  {len(changes)} starter(s) updated from depth chart + injury report:', flush=True)
+        for game, team, was, now, out in changes[:12]:
+            tail = f'   [out: {out}]' if out else ''
+            print(f'    {game} {team}: {was} -> {now}{tail}', flush=True)
+        utils.save_parquet(sched, schedule_path)
+    else:
+        print('  starters agree with the depth chart and injury report', flush=True)
+    return sched

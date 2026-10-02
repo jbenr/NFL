@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """alpha_juicer: find pick setups that hold up, by trying every combination.
 
-Every graded pick carries four things worth slicing on: how far the model is
-from the market (the differential), how much the ensemble disagrees with itself
+Every graded pick carries things worth slicing on: how far the model is from
+the market (the differential), how much the ensemble disagrees with itself
 (SD), how much the game matters to the playoff picture (leverage, per team and
-combined), and when it was played. This searches bands of all four -- and every
-subset of them, so "differential and leverage with no SD condition" is a
-candidate exactly like "all three" is -- then reports what survives.
+combined), when it was played, and -- on the sided-spread architecture, which
+asks each side for the margin separately -- how far apart the two sides landed
+(the gap). This searches bands of all of them, and every subset, so
+"differential and leverage with no SD condition" is a candidate exactly like
+"all of them" is -- then reports what survives.
 
 The point is not to find a 65% cell. With a few thousand cells, coin flips
 produce one. The point is to find a cell that is still there when the model
@@ -131,6 +133,12 @@ def load(folder, market):
     data['picked_leverage'] = np.where(picked_away, data.away_importance, data.home_importance)
     data['opponent_leverage'] = np.where(picked_away, data.home_importance, data.away_importance)
     data['line_magnitude'] = data.market_base.abs() if market == 'spread' else data.market_base
+    # sided-spread asks each side for the margin and averages the two; the
+    # gap between them is that architecture's own disagreement signal, which
+    # the ensemble SD cannot see (it measures spread across members, not
+    # across sides). NaN on every other architecture, which collapses the
+    # dimension to 'any gap' and leaves those searches unchanged.
+    data['gap'] = data.side_gap.abs() if 'side_gap' in data else np.nan
     return data.dropna(subset=['residual']).reset_index(drop=True)
 
 
@@ -217,17 +225,43 @@ def dimensions(market, weeks=None, sample=None):
         lev[f'leverage>={cut:g}'] = lambda d, c=cut: d.leverage >= c
     lev['leverage<=0.3'] = lambda d: d.leverage <= .3
     lev['leverage 0.3-0.7'] = lambda d: d.leverage.between(.3, .7)
+    # The averaged number hides the cases that matter most: a desperate
+    # team against an eliminated one averages to middling. These read the
+    # two sides separately.
+    for cut in [.3, .5]:
+        lev[f'gap>={cut:g} (mismatched)'] = lambda d, c=cut: d.leverage_gap >= c
+    lev['gap<=0.2 (evenly matched)'] = lambda d: d.leverage_gap <= .2
     if market == 'spread':
         for cut in [.5, .7]:
             lev[f'picked side cares>={cut:g}'] = lambda d, c=cut: d.picked_leverage >= c
+        lev['picked side cares<=0.3'] = lambda d: d.picked_leverage <= .3
         lev['picked side cares more'] = lambda d: d.picked_leverage > d.opponent_leverage + .2
+        lev['picked side cares less'] = lambda d: d.picked_leverage + .2 < d.opponent_leverage
         lev['opponent has nothing on it'] = lambda d: d.opponent_leverage <= .3
+        lev['opponent is desperate (>=0.7)'] = lambda d: d.opponent_leverage >= .7
         lev['both teams care (>=0.5)'] = lambda d: np.minimum(d.away_importance, d.home_importance) >= .5
-    return dict(week=week, edge=edge, sd=sd, leverage=lev)
+        lev['neither team cares (<=0.3)'] = lambda d: np.maximum(d.away_importance, d.home_importance) <= .3
+        lev['one cares, one does not'] = lambda d: (np.maximum(d.away_importance, d.home_importance) >= .6) & (
+            np.minimum(d.away_importance, d.home_importance) <= .3)
+    # The two sides' disagreement, where the architecture has one. Banded by
+    # percentile like the ensemble SD, and for the same reason: it is
+    # internal to a model and its absolute scale means nothing across them.
+    gap = {'any gap': lambda d: pd.Series(True, index=d.index)}
+    # `gap` is attached by load(); a sample handed straight to dimensions()
+    # (tests, ad-hoc slices) will not carry it, and its absence just means
+    # the dimension collapses to 'any gap'.
+    if sample is not None and 'gap' in sample and sample.gap.notna().any():
+        for q in (.25, .5):
+            here = f' ({sample.gap.quantile(q):.2f})'
+            gap[f'gap<=p{int(q*100)}{here}'] = lambda d, q=q: d.gap <= d.gap.quantile(q)
+        for q in (.5, .75):
+            here = f' ({sample.gap.quantile(q):.2f})'
+            gap[f'gap>p{int(q*100)}{here}'] = lambda d, q=q: d.gap > d.gap.quantile(q)
+    return dict(week=week, edge=edge, sd=sd, leverage=lev, gap=gap)
 
 
 def combos(market, weeks=None, sample=None):
-    """Every (week, edge, SD, leverage) option tuple."""
+    """Every (week, edge, SD, leverage, gap) option tuple."""
     space = dimensions(market, weeks, sample)
     names = list(space)
     for picks in itertools.product(*(space[n].items() for n in names)):
