@@ -55,5 +55,38 @@ class QBEloTests(unittest.TestCase):
         self.assertAlmostEqual(defense.set_index('team').def_qb_elo['HOME'], expected)
 
 
+    def test_same_short_name_quarterbacks_rated_separately(self):
+        # Jayden (WAS) and Jalon (TB) Daniels are both "J.Daniels" in pbp.
+        base = dict(season=2026, week=4, game_date='2026-09-28', home_team='WAS',
+                    rusher=None, rusher_id=None, qb_scramble=0, rushing_yards=0.,
+                    incomplete_pass=0, complete_pass=1, pass_touchdown=0,
+                    interception=0, sack=0, rush_attempt=0, rush_touchdown=0)
+        plays = pd.DataFrame([
+            dict(base, passer='J.Daniels', passer_id='00-WAS', posteam='WAS', defteam='NYG', passing_yards=50.),
+            dict(base, passer='J.Daniels', passer_id='00-TB', posteam='TB', defteam='DAL', passing_yards=5.),
+        ])
+        sched = pd.DataFrame([dict(season=2026, week=4, away_team='NYG', home_team='WAS',
+                                   away_qb_name='J Winston', home_qb_name='Jayden Daniels',
+                                   away_qb_id=None, home_qb_id='00-WAS')])
+        offense, _ = dc.calc_qb_elo(plays, sched)
+        rated = offense.set_index('id').weighted_qb_elo
+        self.assertAlmostEqual(rated['00-WAS'], 11.5)
+        self.assertAlmostEqual(rated['00-TB'], 2.5)
+
+        starters = pd.DataFrame([
+            dict(team='WAS', name='Jayden Daniels', id='00-WAS'),
+            dict(team='TB', name='Jalon Daniels', id='00-TB'),
+            dict(team='TB', name='Jalon Daniels', id=None),   # no id: name + team
+            dict(team='SEA', name='Jake Daniels', id=None),   # ambiguous: NaN
+            dict(team='TB', name='Jalon Daniels', id='00-NEW'),  # id, no plays: NaN, not Jayden
+        ])
+        got = dc.starter_qb_elo(starters, offense).tolist()
+        self.assertAlmostEqual(got[0], 11.5)
+        self.assertAlmostEqual(got[1], 2.5)
+        self.assertAlmostEqual(got[2], 2.5)
+        self.assertTrue(np.isnan(got[3]))
+        self.assertTrue(np.isnan(got[4]))
+
+
 if __name__ == '__main__':
     unittest.main()

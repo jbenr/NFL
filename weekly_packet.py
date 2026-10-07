@@ -468,14 +468,14 @@ def display_stats(season, week, lookback, calculation='mean'):
     qb, defense = dc.calc_qb_elo(plays, sched)
     # Current scheduled starters; most recent scheduled starter for teams on bye.
     known = sched[(sched.season < season) | ((sched.season == season) & (sched.week <= week))]
-    starters = pd.concat([known[['season', 'week', f'{side}_team', f'{side}_qb_name']].rename(
-        columns={f'{side}_team': 'team', f'{side}_qb_name': 'name'}) for side in ['away', 'home']])
+    id_column = lambda side: [f'{side}_qb_id'] if f'{side}_qb_id' in known else []
+    starters = pd.concat([known[['season', 'week', f'{side}_team', f'{side}_qb_name'] + id_column(side)].rename(
+        columns={f'{side}_team': 'team', f'{side}_qb_name': 'name', f'{side}_qb_id': 'id'})
+        for side in ['away', 'home']])
     starters = starters.dropna(subset=['name']).sort_values(['season', 'week']).drop_duplicates('team', keep='last')
     starters['team'] = starters.team.replace(dc.RELOCATED_TEAMS)
-    starters['name'] = starters.name.map(lambda n: utils.strip_suffix(f'{n.split()[0][0]}.{n.split()[1]}'))
-    qb['name'] = qb.name.map(utils.strip_suffix)
-    ratings = starters.merge(qb, on='name', how='left')[['team', 'weighted_qb_elo']].rename(
-        columns={'weighted_qb_elo': 'off_qb_elo'})
+    starters['off_qb_elo'] = dc.starter_qb_elo(starters, qb)
+    ratings = starters[['team', 'off_qb_elo']]
     result = result.merge(ratings, on='team', how='left', validate='one_to_one').merge(
         defense, on='team', how='left', validate='one_to_one')
     utils.save_parquet(result, cached)

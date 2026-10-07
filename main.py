@@ -103,12 +103,12 @@ def h_to_the_tml(pred, season, week, lookback, tag):
     sched['away_qb'] = sched['away_qb'].apply(utils.strip_suffix)
     sched['home_qb'] = sched['home_qb'].apply(utils.strip_suffix)
 
-    sched = pd.merge(sched, qb[['name', 'weighted_qb_elo']], left_on='away_qb', right_on='name', how='left').rename(
-        columns={'weighted_qb_elo': 'away_qb_elo'}
-    ).drop(columns='name')
-    sched = pd.merge(sched, qb[['name', 'weighted_qb_elo']], left_on='home_qb', right_on='name', how='left').rename(
-        columns={'weighted_qb_elo': 'home_qb_elo'}
-    ).drop(columns='name')
+    # qb_{season}_{week} holds one row per scheduled starter, already matched
+    # by player id (data_crunchski_2.starter_qb_elo); join on team, never on
+    # the short name -- two starters can share one (J.Daniels, WAS and TB).
+    by_team = qb.set_index('team').weighted_qb_elo
+    sched['away_qb_elo'] = sched['away_team'].map(by_team)
+    sched['home_qb_elo'] = sched['home_team'].map(by_team)
 
     sched = sched[[
         'away_team', 'home_team', 'gameday', 'gametime', 'away_qb_elo', 'home_qb_elo', 'away_qb', 'home_qb'

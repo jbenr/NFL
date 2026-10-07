@@ -144,8 +144,9 @@ OUT_PRACTICE = {'Did Not Participate In Practice'}
 
 
 def quarterback_status(seasons):
-    """(team, week) -> ordered list of (name, why_not) for that team's
-    quarterbacks, best first.
+    """Returns (rooms, ids). rooms: (team, week) -> ordered list of
+    (name, why_not) for that team's quarterbacks, best first. ids:
+    (team, name) -> gsis id, where the depth chart carries one.
 
     `why_not` is None for an available quarterback and a short reason for
     one who will not start, so a caller can walk down the depth chart and
@@ -162,7 +163,7 @@ def quarterback_status(seasons):
     charts['dt'] = pd.to_datetime(charts.dt, errors='coerce')
     ones = charts[(charts.pos_abb == 'QB')].dropna(subset=['dt'])
     if ones.empty:
-        return {}
+        return {}, {}
     # The newest chart per team, then that chart's own ranking.
     newest_dt = ones.groupby('team').dt.transform('max')
     current = ones[ones.dt == newest_dt].sort_values(['team', 'pos_rank'])
@@ -190,7 +191,11 @@ def quarterback_status(seasons):
         names = group.player_name.tolist()
         for week in weeks:
             out[(team, int(week))] = [(n, reason(team, int(week), n)) for n in names]
-    return out
+    ids = {}
+    if 'gsis_id' in current:
+        ids = {(t, n): i for t, n, i in current[['team', 'player_name', 'gsis_id']].itertuples(index=False)
+               if pd.notna(i)}
+    return out, ids
 
 
 def refresh_starters(seasons, schedule_path='data/sched.parquet'):
@@ -215,7 +220,7 @@ def refresh_starters(seasons, schedule_path='data/sched.parquet'):
     records who actually played."""
     sched = pd.read_parquet(schedule_path)
     try:
-        rooms = quarterback_status(seasons)
+        rooms, ids = quarterback_status(seasons)
     except Exception as error:
         print(f'  could not read depth charts/injuries ({error}); leaving starters alone', flush=True)
         return sched
@@ -238,6 +243,13 @@ def refresh_starters(seasons, schedule_path='data/sched.parquet'):
                 changes.append((sched.at[row, 'game_id'], team, sched.at[row, column],
                                 available, '; '.join(ruled_out)))
                 sched.at[row, column] = available
+                # The id names the man the schedule had; leaving it would
+                # rate the new starter as the old one. Take the depth
+                # chart's id when it has one, else blank it so
+                # starter_qb_elo matches by name and team instead.
+                id_column = f'{side}_qb_id'
+                if id_column in sched.columns:
+                    sched.at[row, id_column] = ids.get((team, available))
     if changes:
         print(f'  {len(changes)} starter(s) updated from depth chart + injury report:', flush=True)
         for game, team, was, now, out in changes[:12]:

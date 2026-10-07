@@ -26,6 +26,8 @@ RELOCATED_TEAMS = {'SD': 'LAC', 'STL': 'LA', 'OAK': 'LV'}
 _PBP_COLUMNS = {
     'play_type', 'posteam', 'defteam', 'game_date', 'game_id',
     'drive_time_of_possession', 'home_team', 'passer', 'rusher',
+    # gsis ids: the short names collide (Jayden and Jalon are both J.Daniels)
+    'passer_id', 'rusher_id',
     'season', 'week', 'yards_gained', 'complete_pass', 'series', 'series_success',
     'first_down', 'third_down_converted', 'third_down_failed',
     'fourth_down_converted', 'fourth_down_failed', 'interception', 'fumble_lost',
@@ -603,13 +605,33 @@ def calc_ngs(qb, sched):
     return guy
 
 
+def _qb_keys(df_):
+    """The pbp frame with a `passer_key`/`rusher_key` per play: the gsis id,
+    falling back to the short name only for frames that carry no ids. The
+    short name alone is not an identity -- Jayden Daniels (WAS) and Jalon
+    Daniels (TB) are both "J.Daniels", and keying on it pooled their plays
+    into one rating that both teams then received."""
+    df_ = df_.copy()
+    for role in ('passer', 'rusher'):
+        ids = df_[f'{role}_id'] if f'{role}_id' in df_ else pd.Series(index=df_.index, dtype=object)
+        df_[f'{role}_key'] = ids.where(ids.notna(), df_[role])
+    return df_
+
+
 def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.05):
+    """Returns (offense, defense). offense has one row per quarterback keyed by
+    `id` (gsis id), with his most common short `name` and his most recent
+    `team` -- match starters to it with starter_qb_elo(), not by name."""
+    df_ = _qb_keys(df_)
     sched = sched_.merge(df_[['season', 'week']], on=['season', 'week']).drop_duplicates()
     sched = pd.merge(sched, df_[['season', 'week', 'game_date', 'home_team']], on=['season', 'week', 'home_team'], how='left').drop_duplicates()
-    sched['away_qb_short'] = sched.away_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
-    sched['home_qb_short'] = sched.home_qb_name.apply(lambda x: f"{x.split()[0][0]}.{x.split()[1]}")
+    scheduled = set()
+    for side in ('away', 'home'):
+        if f'{side}_qb_id' in sched:
+            scheduled |= set(sched[f'{side}_qb_id'].dropna())
+        scheduled |= set(sched[f'{side}_qb_name'].dropna().map(lambda x: f"{x.split()[0][0]}.{x.split()[1]}"))
 
-    p = df_.groupby(['season', 'week', 'game_date', 'passer']).agg({
+    p = df_.groupby(['season', 'week', 'game_date', 'passer_key']).agg({
         'qb_scramble': 'sum',
         'rushing_yards': 'sum',
         'incomplete_pass': 'sum',
@@ -618,15 +640,15 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
         'pass_touchdown': 'sum',
         'interception': 'sum',
         'sack': 'sum'
-    }).reset_index().rename(columns={'passer': 'name', 'rushing_yards': 'scramble_yards'})
+    }).reset_index().rename(columns={'passer_key': 'id', 'rushing_yards': 'scramble_yards'})
 
-    r = df_.groupby(['season', 'week', 'game_date', 'rusher']).agg({
+    r = df_.groupby(['season', 'week', 'game_date', 'rusher_key']).agg({
         'rush_attempt': 'sum',
         'rushing_yards': 'sum',
         'rush_touchdown': 'sum'
-    }).reset_index().rename(columns={'rusher': 'name'})
+    }).reset_index().rename(columns={'rusher_key': 'id'})
 
-    guy = pd.merge(p, r, how='left', on=['season', 'week', 'game_date', 'name'])
+    guy = pd.merge(p, r, how='left', on=['season', 'week', 'game_date', 'id'])
     guy['pass_attempt'] = guy.incomplete_pass + guy.complete_pass
     guy['rush_attempt'] = guy.rush_attempt + guy.qb_scramble
     guy['rushing_yards'] = guy.rushing_yards + guy.scramble_yards
@@ -641,8 +663,8 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
     # All passing production plus QB rushing, including relief quarterbacks.
     # Identify rushers from passers in this window and scheduled QBs; do not
     # include ordinary RB rushing. Sum within games before recency averaging.
-    qbs = set(df_['passer'].dropna()) | set(sched.away_qb_short) | set(sched.home_qb_short)
-    qb_play = (df_['passer'].notna() | df_['rusher'].isin(qbs) | df_.qb_scramble.eq(1)
+    qbs = set(df_['passer_key'].dropna()) | scheduled
+    qb_play = (df_['passer'].notna() | df_['rusher_key'].isin(qbs) | df_.qb_scramble.eq(1)
                | df_.complete_pass.eq(1) | df_.incomplete_pass.eq(1) | df_.sack.eq(1)
                | df_.interception.eq(1))
     if 'qb_kneel' in df_:
@@ -685,9 +707,18 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
     # print(tabulate(guy,headers='keys',tablefmt=tabulate_formats[4]))
 
     wx = guy['qb_elo'] * guy['weight']
-    num = wx.groupby(guy['name']).sum()
-    den = guy['weight'].groupby(guy['name']).sum()
+    num = wx.groupby(guy['id']).sum()
+    den = guy['weight'].groupby(guy['id']).sum()
     guy_weighted = (num / den).reset_index(name='weighted_qb_elo')
+
+    # Display name and latest team per id, for reports and for matching a
+    # starter whose id the schedule does not carry (see starter_qb_elo).
+    passes = df_.dropna(subset=['passer_key']).sort_values('game_date')
+    names = passes.groupby('passer_key').passer.agg(lambda x: x.mode().iloc[0])
+    teams = passes.groupby('passer_key').posteam.last() if 'posteam' in passes else None
+    guy_weighted['name'] = guy_weighted['id'].map(names)
+    guy_weighted['team'] = guy_weighted['id'].map(teams) if teams is not None else np.nan
+    guy_weighted = guy_weighted[['id', 'name', 'team', 'weighted_qb_elo']]
 
     # sched = sched.merge(sched,guy,left_on=['away_qb_short'])
 
@@ -696,6 +727,36 @@ def calc_qb_elo(df_, sched_, total_season_days=160, steepness=3, floor_weight=0.
     # print(tabulate(sched.tail(10),headers='keys',tablefmt=tabulate_formats[2]))
 
     return guy_weighted, defense
+
+
+def starter_qb_elo(starters, qb):
+    """weighted_qb_elo for each scheduled starter. `starters` has team, name
+    (full, as the schedule spells it) and optionally id (gsis); `qb` is
+    calc_qb_elo's offense frame.
+
+    A starter with an id is matched on it alone. If he has no plays in the
+    window he gets NaN -- falling back to his name would hand Jalon Daniels'
+    first start Jayden's rating. Only a starter without an id (unplayed
+    weeks nflverse has not filled, or one refresh_starters swapped in) is
+    matched by short name, and a name more than one quarterback answers to
+    must also agree on team or it is left NaN rather than guessed."""
+    shorts = [utils.strip_suffix(f'{n.split()[0][0]}.{n.split()[1]}')
+              if isinstance(n, str) and len(n.split()) > 1 else None for n in starters['name']]
+    ids = starters['id'] if 'id' in starters else [None] * len(starters)
+    teams = [RELOCATED_TEAMS.get(t, t) for t in starters['team']]
+    by_id = qb.set_index('id').weighted_qb_elo
+    qb_short = qb['name'].map(lambda n: utils.strip_suffix(n) if isinstance(n, str) else n)
+    qb_team = qb['team'].replace(RELOCATED_TEAMS)
+
+    def one(id_, short, team):
+        if pd.notna(id_):
+            return by_id.get(id_, np.nan)
+        matches = qb[qb_short.eq(short)]
+        if len(matches) > 1:
+            matches = matches[qb_team[matches.index].eq(team)]
+        return matches.weighted_qb_elo.iloc[0] if len(matches) == 1 else np.nan
+
+    return pd.Series([one(*row) for row in zip(ids, shorts, teams)], index=starters.index, dtype=float)
 
 
 # helpers for comp_stats
@@ -920,18 +981,18 @@ def _calc_week(sw):
         sched_[f'{side}_qb_short'] = sched_[f'{side}_qb_name'].apply(
             lambda x: f'{x.split()[0][0]}.{x.split()[1]}' if isinstance(x, str) and len(x.split()) > 1 else '')
 
-    qb_team_map = pd.concat([
-        sched_[['away_qb_short', 'away_team']].rename(columns={'away_qb_short': 'qb', 'away_team': 'team'}),
-        sched_[['home_qb_short', 'home_team']].rename(columns={'home_qb_short': 'qb', 'home_team': 'team'})
-    ])
-
-    qb['name'] = qb['name'].apply(utils.strip_suffix)
-
-    qb = pd.merge(qb, qb_team_map, left_on='name', right_on='qb', how='left').drop(columns='qb').sort_values(by='team').reset_index(drop=True)
+    starters = pd.concat([
+        sched_[[f'{side}_team', f'{side}_qb_name'] + ([f'{side}_qb_id'] if f'{side}_qb_id' in sched_ else [])].rename(
+            columns={f'{side}_team': 'team', f'{side}_qb_name': 'name', f'{side}_qb_id': 'id'})
+        for side in ['away', 'home']]).reset_index(drop=True)
+    starters['weighted_qb_elo'] = starter_qb_elo(starters, qb)
+    starters['name'] = starters['name'].map(
+        lambda x: utils.strip_suffix(f'{x.split()[0][0]}.{x.split()[1]}') if isinstance(x, str) and len(x.split()) > 1 else x)
+    qb = starters[['name', 'weighted_qb_elo', 'team']].sort_values(by='team').reset_index(drop=True)
     utils.make_dir('data/qb')
     qb.to_parquet(f'data/qb/qb_{s}_{w}_{lookback}.parquet')
 
-    calc = pd.merge(calc, qb, on='team', how='left').rename(columns={'weighted_qb_elo':'off_qb_elo'}).drop(columns='name')
+    calc = pd.merge(calc, qb.drop(columns='name'), on='team', how='left', validate='many_to_one').rename(columns={'weighted_qb_elo':'off_qb_elo'})
     calc = pd.merge(calc, dee, on='team', how='left').set_index('team')
 
     comp = comp_stats(calc, sched_, _WORK['use_scaling'])
