@@ -144,9 +144,10 @@ OUT_PRACTICE = {'Did Not Participate In Practice'}
 
 
 def quarterback_status(seasons):
-    """Returns (rooms, ids). rooms: (team, week) -> ordered list of
+    """Returns (rooms, ids, listed). rooms: (team, week) -> ordered list of
     (name, why_not) for that team's quarterbacks, best first. ids:
-    (team, name) -> gsis id, where the depth chart carries one.
+    (team, name) -> gsis id, where the depth chart carries one. listed:
+    (team, week) -> names on that week's injury report in any capacity.
 
     `why_not` is None for an available quarterback and a short reason for
     one who will not start, so a caller can walk down the depth chart and
@@ -163,7 +164,7 @@ def quarterback_status(seasons):
     charts['dt'] = pd.to_datetime(charts.dt, errors='coerce')
     ones = charts[(charts.pos_abb == 'QB')].dropna(subset=['dt'])
     if ones.empty:
-        return {}, {}
+        return {}, {}, {}
     # The newest chart per team, then that chart's own ranking.
     newest_dt = ones.groupby('team').dt.transform('max')
     current = ones[ones.dt == newest_dt].sort_values(['team', 'pos_rank'])
@@ -195,7 +196,8 @@ def quarterback_status(seasons):
     if 'gsis_id' in current:
         ids = {(t, n): i for t, n, i in current[['team', 'player_name', 'gsis_id']].itertuples(index=False)
                if pd.notna(i)}
-    return out, ids
+    listed = {(t, int(w)): set(g.full_name) for (t, w), g in injuries.dropna(subset=['week']).groupby(['team', 'week'])}
+    return out, ids, listed
 
 
 def refresh_starters(seasons, schedule_path='data/sched.parquet'):
@@ -220,12 +222,13 @@ def refresh_starters(seasons, schedule_path='data/sched.parquet'):
     records who actually played."""
     sched = pd.read_parquet(schedule_path)
     try:
-        rooms, ids = quarterback_status(seasons)
+        rooms, ids, listed = quarterback_status(seasons)
     except Exception as error:
         print(f'  could not read depth charts/injuries ({error}); leaving starters alone', flush=True)
         return sched
     if not rooms:
         return sched
+    reported = sorted({w for _, w in rooms})
     unplayed = sched.away_score.isna()
     changes = []
     for side in ('away', 'home'):
@@ -235,6 +238,21 @@ def refresh_starters(seasons, schedule_path='data/sched.parquet'):
         for row in sched.index[unplayed]:
             team, week = sched.at[row, f'{side}_team'], int(sched.at[row, 'week'])
             room = rooms.get((team, week))
+            if not room and pd.notna(sched.at[row, column]):
+                # This week's injury report is not out yet (it lags the
+                # depth chart by days -- on the Tuesday of 2026 week 6 it
+                # stopped at week 5, so Seattle kept Drew Lock though the
+                # chart had Sam Darnold back at QB1). Last week's report
+                # cannot say who is out THIS week, so it rules nobody out,
+                # and it only clears the chart's QB1 if he was not on it at
+                # all: Darnold was two weeks clean, but Caleb Williams was
+                # still listed and nflverse's name stands until the new
+                # report. Only for a game nflverse has already named a
+                # starter for, so later weeks stay blank.
+                earlier = [w for w in reported if w < week]
+                chart = rooms.get((team, earlier[-1])) if earlier else None
+                if chart and chart[0][0] not in listed.get((team, earlier[-1]), ()):
+                    room = [(chart[0][0], None)]
             if not room:
                 continue
             available = next((n for n, why in room if not why), None)
