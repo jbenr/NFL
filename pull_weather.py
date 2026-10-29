@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -554,9 +555,50 @@ def geocode_city(query, count=8):
     return float(best['latitude']), float(best['longitude']), best
 
 
-def local_weather(latitude=None, longitude=None, city=None):
-    """Display the next 72 hours at supplied coordinates, a geocoded city, or
-    IP location; no NFL writes."""
+INTERVAL_UNITS = {'m': 1, 'min': 1, 'mins': 1, 'minute': 1, 'minutes': 1,
+                  'h': 60, 'hr': 60, 'hrs': 60, 'hour': 60, 'hours': 60,
+                  'd': 1440, 'day': 1440, 'days': 1440}
+# How each column collapses when a row spans several native forecast steps:
+# amounts add up, "worst case" columns take the peak, levels average.
+INTERVAL_AGGREGATION = {'temperature_2m': 'mean', 'apparent_temperature': 'mean',
+                        'precipitation_probability': 'max', 'precipitation': 'sum',
+                        'snowfall': 'sum', 'cloud_cover': 'mean',
+                        'wind_speed_10m': 'mean', 'wind_gusts_10m': 'max'}
+MAX_FORECAST_DAYS = 16
+
+
+def parse_interval(text):
+    """'30min', '1h', '3 hrs', '1d' -> Timedelta. Must be a whole multiple of
+    15 minutes, the finest step Open-Meteo serves."""
+    match = re.fullmatch(r'\s*(\d+)\s*([a-z]+)\s*', str(text).lower())
+    if not match or match.group(2) not in INTERVAL_UNITS or int(match.group(1)) == 0:
+        raise ValueError(f'Bad interval "{text}" -- use e.g. 30min, 1h, 3h, 1d')
+    minutes = int(match.group(1)) * INTERVAL_UNITS[match.group(2)]
+    if minutes % 15:
+        raise ValueError(f'Interval "{text}" must be a multiple of 15 minutes')
+    return pd.Timedelta(minutes=minutes)
+
+
+def describe_interval(interval):
+    minutes = int(interval / pd.Timedelta(minutes=1))
+    for unit, size in [('day', 1440), ('hour', 60), ('minute', 1)]:
+        if minutes % size == 0:
+            count = minutes // size
+            return f'{count} {unit}' + ('s' if count != 1 else '')
+
+
+def local_weather(latitude=None, longitude=None, city=None, interval='1h', count=None):
+    """Display `count` rows of `interval` each (default: 72 hours' worth) at
+    supplied coordinates, a geocoded city, or IP location; no NFL writes."""
+    interval = parse_interval(interval) if not isinstance(interval, pd.Timedelta) else interval
+    if count is None:
+        count = max(1, int(pd.Timedelta(hours=72) // interval))
+    if count < 1:
+        raise ValueError('Count must be at least 1')
+    span = interval * count
+    if span > pd.Timedelta(days=MAX_FORECAST_DAYS - 1):
+        raise ValueError(f'{count} x {describe_interval(interval)} = {describe_interval(span)} '
+                         f'is past the forecast horizon (max {MAX_FORECAST_DAYS - 1} days)')
     if city is not None and (latitude is not None or longitude is not None):
         raise ValueError('Provide --city, or --latitude/--longitude, or neither for IP location -- not both')
     place = None
@@ -578,47 +620,78 @@ def local_weather(latitude=None, longitude=None, city=None):
     if not np.isfinite([latitude, longitude]).all() or not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         raise ValueError('Invalid latitude/longitude')
     where = f'{place} ({latitude:.5f}, {longitude:.5f})' if place else f'{latitude:.5f}, {longitude:.5f}'
-    print(f'Weather at {where}: fetching next 72 hours...', flush=True)
-    params = dict(latitude=latitude, longitude=longitude, models=MODEL,
-                  hourly=','.join(list(VARIABLES) + ['cloud_cover', 'apparent_temperature', 'snowfall']),
-                  timezone='America/New_York', forecast_days=4, timeformat='unixtime',
-                  temperature_unit='fahrenheit', wind_speed_unit='mph', precipitation_unit='inch')
+    window = f'{count} x {describe_interval(interval)} ({describe_interval(span)})'
+    print(f'Weather at {where}: fetching {window}...', flush=True)
+    # Whole-hour intervals use GFS's native hourly output; anything finer
+    # needs the 15-minute feed (interpolated from hourly for GFS).
+    resolution, step = (('hourly', pd.Timedelta(hours=1)) if interval % pd.Timedelta(hours=1) == pd.Timedelta(0)
+                        else ('minutely_15', pd.Timedelta(minutes=15)))
+    forecast_days = min(MAX_FORECAST_DAYS, int(np.ceil(span / pd.Timedelta(days=1))) + 1)
+    params = {'latitude': latitude, 'longitude': longitude, 'models': MODEL,
+              resolution: ','.join(list(VARIABLES) + ['cloud_cover', 'apparent_temperature', 'snowfall']),
+              'timezone': 'America/New_York', 'forecast_days': forecast_days, 'timeformat': 'unixtime',
+              'temperature_unit': 'fahrenheit', 'wind_speed_unit': 'mph', 'precipitation_unit': 'inch'}
     response = requests.get('https://api.open-meteo.com/v1/forecast', params=params, timeout=(10, 45))
     response.raise_for_status()
     payload = response.json()
     if payload.get('error'):
         raise ValueError(payload.get('reason', 'Open-Meteo error'))
-    hourly = payload.get('hourly', {})
-    if not hourly.get('time'):
-        raise ValueError('Open-Meteo returned no hourly forecast')
-    frame = pd.DataFrame(hourly)
+    raw = payload.get(resolution, {})
+    if not raw.get('time'):
+        raise ValueError(f'Open-Meteo returned no {resolution} forecast')
+    frame = pd.DataFrame(raw)
     valid = pd.to_datetime(frame['time'], unit='s', utc=True)
     now = pd.Timestamp.now(tz='UTC')
-    upcoming = (valid >= now) & (valid <= now + pd.Timedelta(hours=72))
-    frame = frame.loc[upcoming].copy()
-    if frame.empty:
-        raise ValueError('Open-Meteo returned no forecasts in the next 72 hours')
-    frame['time'] = valid.loc[upcoming].dt.tz_convert('America/New_York').dt.strftime('%a %m/%d %I:%M %p %Z')
+    upcoming = valid >= now
+    if not upcoming.any():
+        raise ValueError(f'Open-Meteo returned no forecasts in the next {describe_interval(span)}')
+    start = valid.loc[upcoming].min()
+    bucket = (valid - start) // interval
+    keep = upcoming & (bucket < count)
+    frame, valid, bucket = frame.loc[keep].copy(), valid.loc[keep], bucket.loc[keep]
     # snowfall has no unit override on this endpoint either -- always cm,
     # same as the historical archive API. Converted here so it reads in the
     # same inches as Precip in.
     if 'snowfall' in frame:
         frame['snowfall'] = pd.to_numeric(frame['snowfall'], errors='coerce') / 2.54
+    aggregate = interval > step
+    if aggregate:
+        steps = bucket.value_counts()
+        # A trailing row the forecast only partly covers would understate
+        # summed precipitation -- drop it rather than print a misleading total.
+        complete = steps.index[steps == interval // step]
+        rule = {c: INTERVAL_AGGREGATION[c] for c in frame if c in INTERVAL_AGGREGATION}
+        values = frame.drop(columns='time').apply(pd.to_numeric, errors='coerce')
+        frame = values.groupby(bucket.values)[list(rule)].agg(rule).loc[lambda f: f.index.isin(complete)]
+        valid = pd.Series(start + interval * frame.index.to_numpy(), index=frame.index)
+    if frame.empty:
+        raise ValueError(f'Open-Meteo returned no forecasts in the next {describe_interval(span)}')
+    local = valid.dt.tz_convert('America/New_York')
+    frame['time'] = local.dt.strftime('%a %m/%d %I:%M %p %Z')
     columns = {'time': 'Time (ET)', 'temperature_2m': 'Temp F', 'apparent_temperature': 'Feels Like F',
                'precipitation_probability': 'Precip %', 'precipitation': 'Precip in',
                'snowfall': 'Snow in', 'cloud_cover': 'Cloud %',
                'wind_speed_10m': 'Wind mph', 'wind_gusts_10m': 'Gust mph'}
-    table = frame.reindex(columns=columns).rename(columns=columns)
-    print('Next 72 hours | Eastern Time (ET)')
-    hours = valid.loc[upcoming].dt.tz_convert('America/New_York').dt.hour
-    print(weather_table(table, hours))
-    print('Hourly model forecast, not a measurement at your exact spot. No NFL files changed.')
+    table = frame.reindex(columns=columns).rename(columns=columns).reset_index(drop=True)
+    print(f'Next {describe_interval(span)}, every {describe_interval(interval)} | Eastern Time (ET)')
+    print(weather_table(table, local.dt.hour))
+    if len(table) < count:
+        print(f'Only {len(table)} of {count} rows available -- the forecast ends sooner.')
+    if aggregate:
+        print(f'Each row covers the {describe_interval(interval)} starting at its time: precipitation '
+              'and snow summed, Precip % and gusts are the peak, the rest averaged.')
+    print('Model forecast, not a measurement at your exact spot. No NFL files changed.')
     return table
 
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--here', action='store_true', help='Next 72 hours at your IP location, or supplied --latitude/--longitude')
+    p.add_argument('--interval', default='1h',
+                   help='With --here/--city: row spacing, e.g. 30min, 1h, 3h, 1d (multiple of 15 minutes; default 1h)')
+    p.add_argument('--count', type=int,
+                   help='With --here/--city: number of --interval rows, e.g. --interval 1h --count 96 '
+                        '(default: 72 hours\' worth)')
     p.add_argument('--historical', action='store_true',
                    help='Bulk-pull OBSERVED weather (reanalysis, not a forecast) for every completed '
                         'game in --start-season..--end-season. See pull_historical()\'s docstring for '
@@ -655,7 +728,8 @@ if __name__ == '__main__':
         if any(v is not None for v in [args.season, args.week, args.games, args.game_id, args.kickoff]) or args.mode != 'live':
             p.error('--here/--city is a standalone daily forecast; do not combine with game inputs or archive mode')
         try:
-            local_weather(args.latitude, args.longitude, city=args.city)
+            local_weather(args.latitude, args.longitude, city=args.city,
+                          interval=args.interval, count=args.count)
         except (ValueError, requests.RequestException) as error:
             p.exit(1, f'Local weather failed: {error}\n')
         p.exit()

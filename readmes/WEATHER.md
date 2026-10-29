@@ -29,6 +29,18 @@ Explicit coordinates bypass IPinfo and are sent to Open-Meteo.
 Prints only future hourly temperature, wind, gusts and
 precipitation in Eastern Time (America/New_York, automatic daylight saving),
 using dates and AM/PM. Hours before now or beyond 72 hours are excluded.
+
+To change the spacing or length, pass --interval (30min, 1h, 3h, 1d, ...; any
+multiple of 15 minutes) and --count (how many of those rows):
+
+    python pull_weather.py --here --interval 1h --count 96
+    python pull_weather.py --city "Buffalo, NY" --interval 3h --count 16
+
+Without --count you get 72 hours' worth. When a row is longer than the
+forecast's own step, the row covers that whole stretch: precipitation and
+snow are summed, Precip % and gusts show the peak, and the other columns are
+averaged. Sub-hour intervals use Open-Meteo's 15-minute feed. The total
+can't go past 15 days, where the GFS forecast ends.
 These are model forecasts, not exact
 on-site measurements. This mode does not write to NFL caches or forecast files.
 

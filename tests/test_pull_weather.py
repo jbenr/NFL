@@ -78,6 +78,46 @@ class WeatherTests(unittest.TestCase):
             self.assertEqual(table['Precip %'].iloc[0], 30.)
             save.assert_not_called()
 
+    def test_parse_interval(self):
+        self.assertEqual(weather.parse_interval('30min'), pd.Timedelta(minutes=30))
+        self.assertEqual(weather.parse_interval('3 hrs'), pd.Timedelta(hours=3))
+        self.assertEqual(weather.parse_interval('1d'), pd.Timedelta(days=1))
+        for bad in ['10min', '0h', 'h', '2 weeks', '1.5h']:
+            with self.assertRaises(ValueError):
+                weather.parse_interval(bad)
+
+    def test_local_weather_aggregates_multi_hour_intervals(self):
+        now = pd.Timestamp.now(tz='UTC').ceil('h')
+        times = [now + pd.Timedelta(hours=h) for h in range(7)]
+        payload = dict(hourly=dict(time=[int(t.timestamp()) for t in times],
+                                   temperature_2m=[60., 63., 66., 70., 70., 70., 99.],
+                                   precipitation=[.1, .2, 0., 0., .05, 0., 0.],
+                                   wind_gusts_10m=[10., 30., 20., 5., 5., 5., 5.]))
+        with patch.object(weather.requests, 'get') as get, patch('builtins.print'):
+            get.return_value.json.return_value = payload
+            table = weather.local_weather(44.5, -88.06, interval='3h', count=3)
+            self.assertIn('hourly', get.call_args.kwargs['params'])
+        # Third 3h row only has one hour of data, so it is dropped.
+        self.assertEqual(list(table['Temp F']), [63., 70.])
+        self.assertEqual([round(v, 3) for v in table['Precip in']], [.3, .05])
+        self.assertEqual(list(table['Gust mph']), [30., 5.])
+
+    def test_local_weather_sub_hour_uses_15_minute_feed(self):
+        now = pd.Timestamp.now(tz='UTC').ceil('15min')
+        times = [now + pd.Timedelta(minutes=15 * i) for i in range(4)]
+        payload = dict(minutely_15=dict(time=[int(t.timestamp()) for t in times], temperature_2m=[60., 62., 64., 66.]))
+        with patch.object(weather.requests, 'get') as get, patch('builtins.print'):
+            get.return_value.json.return_value = payload
+            table = weather.local_weather(44.5, -88.06, interval='30min', count=2)
+            self.assertIn('minutely_15', get.call_args.kwargs['params'])
+        self.assertEqual(list(table['Temp F']), [61., 65.])
+
+    def test_local_weather_rejects_window_past_horizon(self):
+        with patch.object(weather.requests, 'get') as get:
+            with self.assertRaises(ValueError):
+                weather.local_weather(44.5, -88.06, interval='1d', count=20)
+            get.assert_not_called()
+
     def test_local_weather_rejects_invalid_coordinates_before_request(self):
         with patch.object(weather.requests, 'get') as get:
             for latitude, longitude in [(91, 0), (0, 181), (float('nan'), 0)]:
