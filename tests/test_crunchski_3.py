@@ -44,3 +44,56 @@ class MatchupPreparationTests(unittest.TestCase):
             if mode == 'differential':
                 expected = data.away_raw_off_pass_ypp - data.home_raw_def_pass_ypp
                 np.testing.assert_array_equal(actual.diff_pass_ypp.iloc[:len(data)], expected)
+
+
+class ForecastLockTests(unittest.TestCase):
+    """A rerun must see the same weather as the first build, or a new
+    forecast capture moves picks with nothing else changed."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        self.dir = Path(tempfile.mkdtemp())
+        self.hist = self.dir / 'hist.parquet'
+        self.fc = self.dir / 'fc.parquet'
+        self.lock = self.dir / 'lock.parquet'
+        played = {c: [1.0] for c in dc.HISTORICAL_WEATHER}
+        pd.DataFrame({'game_id': ['2026_07_A_B'], **played}).to_parquet(self.hist)
+        self.panel = pd.DataFrame({'game_id': ['2026_07_A_B', '2026_08_C_D'], 'roof': ['outdoors', 'outdoors']})
+
+    def capture(self, wind, issued):
+        row = {c: 0.0 for c in dc.HISTORICAL_WEATHER}
+        row.update(game_id='2026_08_C_D', wind_mph=wind, issued_at=pd.Timestamp(issued, tz='UTC'))
+        old = pd.read_parquet(self.fc) if self.fc.exists() else pd.DataFrame()
+        pd.concat([old, pd.DataFrame([row])], ignore_index=True).to_parquet(self.fc)
+
+    def wind(self, lock=True):
+        out = dc.attach_historical_weather(self.panel, self.hist, self.fc, lock_path=self.lock if lock else None)
+        return out.set_index('game_id').wind_mph
+
+    def test_a_newer_capture_does_not_move_a_locked_game(self):
+        self.capture(10., '2026-10-27')
+        self.assertEqual(self.wind()['2026_08_C_D'], 10.)
+        self.capture(18., '2026-10-28')
+        self.assertEqual(self.wind()['2026_08_C_D'], 10.)
+        self.assertEqual(self.wind(lock=False)['2026_08_C_D'], 18., 'without a lock the newest capture wins')
+
+    def test_unlocking_a_week_takes_the_newest_capture_and_locks_it(self):
+        self.capture(10., '2026-10-27')
+        self.wind()
+        self.capture(18., '2026-10-28')
+        self.assertEqual(dc.unlock_forecasts(2026, 8, self.lock), 1)
+        self.assertEqual(self.wind()['2026_08_C_D'], 18.)
+        self.capture(25., '2026-10-29')
+        self.assertEqual(self.wind()['2026_08_C_D'], 18.)
+
+    def test_played_games_never_read_the_lock(self):
+        self.capture(10., '2026-10-27')
+        self.assertEqual(self.wind()['2026_07_A_B'], 1.)
+        self.assertNotIn('2026_07_A_B', set(pd.read_parquet(self.lock).game_id))
+
+    def test_unlock_only_frees_the_named_week(self):
+        self.capture(10., '2026-10-27')
+        self.wind()
+        self.assertEqual(dc.unlock_forecasts(2026, 9, self.lock), 0)
+        self.assertEqual(len(pd.read_parquet(self.lock)), 1)

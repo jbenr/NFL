@@ -455,7 +455,7 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
               f"{settings['calculation']} stats -- building its own panel", flush=True)
         other = build_panel(season, week, span + settings['train_window'] - 20,
                             settings['lookback'], settings['calculation'], use_scaling=False)
-        other = dc3.attach_historical_weather(other, weather_file, forecast_file)
+        other = dc3.attach_historical_weather(other, weather_file, forecast_file, lock_path=dc3.FORECAST_LOCK)
         if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:
             import travel
             other = travel.attach_travel(other)
@@ -473,7 +473,7 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
 
     panel = build_panel(season, week, span + train_window - 20, lookback, calc, use_scaling=False)
     try:
-        panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+        panel = dc3.attach_historical_weather(panel, weather_file, forecast_file, lock_path=dc3.FORECAST_LOCK)
     except ValueError as error:
         if 'Historical weather missing' not in str(error):
             raise
@@ -503,7 +503,7 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
             forecast_failure = pull_error
             print(f'  live forecast pull failed: {pull_error}', flush=True)
         try:
-            panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+            panel = dc3.attach_historical_weather(panel, weather_file, forecast_file, lock_path=dc3.FORECAST_LOCK)
         except ValueError as still_missing:
             # A game that has already kicked off is past the forecast cutoff
             # and its archived run is not published yet, so neither forecast
@@ -518,7 +518,7 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
             except Exception as historical_error:
                 raise ValueError(f'{still_missing} (forecast: {forecast_failure}; '
                                  f'reanalysis: {historical_error})') from historical_error
-            panel = dc3.attach_historical_weather(panel, weather_file, forecast_file)
+            panel = dc3.attach_historical_weather(panel, weather_file, forecast_file, lock_path=dc3.FORECAST_LOCK)
     if dc3.TRAVEL_CONTEXT in dc3.BASE_CONTEXT:   # Model 2.2's input
         import travel
         panel = travel.attach_travel(panel)

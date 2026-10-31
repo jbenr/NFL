@@ -1,4 +1,6 @@
 """Reusable matchup preparation; historical team-stat math stays in crunchski_2."""
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import polars as pl
@@ -123,7 +125,48 @@ HISTORICAL_WEATHER = ['feels_like_f', 'wind_mph', 'precip_inches', 'rain_inches'
 MODEL_WEATHER = ['feels_like_f', 'wind_mph', 'precip_inches']
 
 
-def attach_historical_weather(panel, path, forecast_path=None):
+FORECAST_LOCK = 'data/weather/forecast_lock.parquet'
+
+
+def locked_forecasts(forecast, lock_path, game_ids):
+    """The forecast row each game should use, frozen at first use.
+
+    Without a lock the fallback takes the newest capture, so every forecast
+    pull could move a pick: wind alone swings ~5 mph between 2026 captures
+    at the 90th percentile, about 2.3 points on a total. With one, the first
+    build that needs a game's forecast writes the row it used to lock_path,
+    and every later build reuses it -- the same inputs give the same picks.
+    To take a newer forecast on purpose, drop the game's rows from the lock
+    (weekly_packet.py --relock-weather or --refresh)."""
+    lock_path = Path(lock_path)
+    lock = pd.read_parquet(lock_path) if lock_path.exists() else pd.DataFrame(columns=['game_id'])
+    wanted = pd.Index(pd.unique(pd.Series(game_ids)))
+    new = forecast[forecast.game_id.isin(wanted.difference(lock.game_id))]
+    if not new.empty:
+        new = new.assign(locked_at=pd.Timestamp.now(tz='UTC').isoformat())
+        lock = pd.concat([lock, new], ignore_index=True)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = lock_path.with_suffix('.tmp.parquet')
+        lock.to_parquet(tmp, index=False)
+        tmp.replace(lock_path)
+        print(f'  weather: locked the forecast for {new.game_id.nunique()} game(s) in {lock_path}', flush=True)
+    return lock[lock.game_id.isin(wanted)].drop_duplicates('game_id', keep='last').set_index('game_id')
+
+
+def unlock_forecasts(season, week, lock_path=FORECAST_LOCK):
+    """Forget the locked forecasts for one week so the next build takes the
+    newest capture (and locks that instead). Returns how many games it freed."""
+    lock_path = Path(lock_path)
+    if not lock_path.exists():
+        return 0
+    lock = pd.read_parquet(lock_path)
+    prefix = f'{int(season)}_{int(week):02d}_'
+    drop = lock.game_id.astype(str).str.startswith(prefix)
+    lock[~drop].to_parquet(lock_path, index=False)
+    return int(lock.loc[drop, 'game_id'].nunique())
+
+
+def attach_historical_weather(panel, path, forecast_path=None, lock_path=None):
     """Explicit retrospective input for games already played. forecast_path
     (pull_weather.py --season ... --week ... --mode live, written to
     data/weather/forecasts.parquet by default) is an opt-in fallback used
@@ -146,8 +189,12 @@ def attach_historical_weather(panel, path, forecast_path=None):
         # Ties (equally complete) break on the latest issuance.
         forecast = forecast.assign(_complete=forecast[available].notna().sum(axis=1))
         sort_cols = ['_complete'] + (['issued_at'] if 'issued_at' in forecast else [])
-        fallback = (forecast.sort_values(sort_cols).drop_duplicates('game_id', keep='last')
-                            [['game_id'] + available].set_index('game_id'))
+        newest = forecast.sort_values(sort_cols).drop_duplicates('game_id', keep='last')
+        if lock_path is not None:
+            fallback = locked_forecasts(newest.drop(columns='_complete'), lock_path,
+                                        result.loc[missing, 'game_id'])[available]
+        else:
+            fallback = newest[['game_id'] + available].set_index('game_id')
         for column in available:
             result.loc[missing, column] = result.loc[missing, 'game_id'].map(fallback[column])
         missing = ~np.isfinite(result[HISTORICAL_WEATHER].to_numpy(dtype=float)).all(axis=1)

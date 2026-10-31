@@ -181,14 +181,14 @@ class ProfileTests(unittest.TestCase):
                              'the default profile owns the shared panel and must be fit first')
 
     def test_the_solved_preset_owns_exactly_the_weeks_it_was_measured_on(self):
-        """Early-season spreads go to the fixed-taper model, and only for the
-        weeks its backtest actually covers -- weeks 6-12 were still running
-        when the bucket went in, so the window stops at 5."""
+        """Spreads through week 8 go to the fixed-taper model: weeks 1-5 and
+        6-8 each earned a bucket on its 2013-2025 backtest, and weeks 9-12
+        were measured and did not, so the window stops at 8."""
         import model_spec
-        for week in [1, 3, 5]:
+        for week in [1, 3, 5, 6, 8]:
             self.assertEqual(model_spec.owner('spread', week), model_spec.SOLVED_PROFILE)
             self.assertEqual(model_spec.owner('total', week), model_spec.DEFAULT_PROFILE)
-        for week in [6, 12, 13, 22]:
+        for week in [9, 12, 13, 22]:
             self.assertEqual(model_spec.owner('spread', week), model_spec.DEFAULT_PROFILE)
 
     def test_every_owning_profile_has_buckets_to_justify_it(self):

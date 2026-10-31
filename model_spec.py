@@ -96,10 +96,10 @@ PROFILES = {
 DEFAULT_PROFILE = 'Model 2.0 · weighted'
 SHARED_PROFILE = 'Model 2.1 · shared'
 SOLVED_PROFILE = 'Model 2.0 · solved'
-# Weeks the solved preset owns the spread. Measured on 2013-2025 weeks 1-5;
-# weeks 6-12 are still being backtested, so the window stops where the
-# evidence does rather than where the hunch does.
-SOLVED_SPREAD_WEEKS = range(1, 6)
+# Weeks the solved preset owns the spread. Measured on 2013-2025: weeks 1-5
+# (58.5%) and weeks 6-8 (60.5%, edge >= 2 and SD <= 4.0). Weeks 9-12 were
+# backtested too and stayed at 53% -- no bucket -- so the window stops at 8.
+SOLVED_SPREAD_WEEKS = range(1, 9)
 # Where each profile's measured edge is. The shared architecture is 54.9% on
 # weeks 1-12 spreads and 49.6% from week 13 (43.0% in weeks 13-14, which is
 # the two-sided model's best window), so they split the season rather than
@@ -127,7 +127,7 @@ def owner(market, week):
     right shape the moment a second profile earns a bucket: put it back by
     returning SHARED_PROFILE here for the weeks it owns.
 
-    Early-season spreads now go to SOLVED_PROFILE, which is the same model
+    Spreads through week 8 now go to SOLVED_PROFILE, which is the same model
     with the recency taper fixed -- the first thing to beat the market on a
     spread before week 13."""
     if market == 'spread' and int(week) in SOLVED_SPREAD_WEEKS:
@@ -267,7 +267,9 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
             'weather': {
                 'inputs': list(dc3.MODEL_WEATHER),
                 'sources': {'played games': 'Open-Meteo historical reanalysis at kickoff', 'upcoming games':
-                            'latest Open-Meteo forecast for kickoff'},
+                            'Open-Meteo forecast for kickoff, frozen the first time a build uses it '
+                            '(data/weather/forecast_lock.parquet) so reruns see the same weather; '
+                            'weekly_packet.py --relock-weather takes the newest one'},
                 'indoor_games': 'dome or closed roof: fixed 72°F feels-like, 0 mph wind, 0 in precipitation',
                 'retractable_roof_not_listed': 'treated as outdoors',
             },
@@ -327,7 +329,8 @@ def spec(*, season, week, lookback, train_window, iterations, epochs, seed, calc
         'data': {'play_by_play': 'nflverse (nfl_data_py), data/pbp/pbp_{season}.parquet',
                  'schedule_and_lines': modified('data/sched.parquet'),
                  'stadium_coordinates': modified('data/weather/stadium_coordinates.parquet'),
-                 'historical_weather': modified(weather_file), 'forecast_weather': modified(forecast_file)},
+                 'historical_weather': modified(weather_file), 'forecast_weather': modified(forecast_file),
+                 'forecast_lock': modified(dc3.FORECAST_LOCK)},
         'changes_from_previous_version': CHANGES,
     }
 

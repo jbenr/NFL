@@ -1341,8 +1341,24 @@ PICK_BUCKETS = {
                   '1-5 spread IC from 0.239 to 0.292 on the same 1011 games. Two honest caveats: paired '
                   'against the default on identical games the pick-level gain is 62-50 on 112 '
                   'disagreements (McNemar p = 0.30), and the shuffled-outcome null beats 58.5% in 18 of '
-                  '400 tries (p = 0.045) -- it passed, not comfortably. Weeks 6-12 are still backtesting; '
-                  'if the edge extends, this window widens.'),
+                  '400 tries (p = 0.045) -- it passed, not comfortably. Weeks 6-12 have since been '
+                  'backtested: the edge extends through week 8 (next bucket) and not past it.'),
+        dict(rule='weeks 6-8, the model off the spread by 2 or more, ensemble SD at most 4.0',
+             test=lambda week, importance, sd, line, edge: (6 <= week <= 8 and edge is not None
+                                                            and abs(edge) >= 2
+                                                            and sd is not None and sd <= 4.0),
+             model=SOLVED_MODEL, rate=.605, n=177, worth='+2.1u a season on ~14 picks, up 9 of 13 years',
+             frequency=f'14 a season · about 4.5 a week across the 3 weeks it can fire',
+             eras='62 / 64 / 59 / 58%',
+             siblings='not yet measured on other runs; the default model on these same 177 games: 57.1%',
+             note='The weeks 6-12 backtest of the solved model finished, and the edge carries through week 8 '
+                  'and then stops (weeks 9-12 with the same cuts: 53.1%). Both cuts are inherited, not fitted '
+                  'here: edge 2 is the packet\'s standard spread threshold and SD 4.0 is the weeks 1-5 bucket\'s. '
+                  'Only the week window was chosen. On the same weeks the default model is 50.7% at edge 2. '
+                  'Halves 63 / 59%. Caveats: the shuffled-outcome null over the grid it was found in beats it '
+                  '54 times in 1000 (p = 0.054, borderline, about the same as weeks 1-5); week 7 alone is '
+                  '52%; and the SD effect is not a slope -- the 3.5-4.0 band carries it (64%) while under 3.5 '
+                  'is 53%. One model, one run: bet it flat.'),
     ]),
     'total': dict(edge=5.0, buckets=[
         # Ordered, and each rate is measured on what the buckets above it
@@ -1397,10 +1413,12 @@ PICK_BUCKETS = {
 # What the buckets deliberately leave out, and what it would have cost.
 NO_PICK = {
     'spread_solved': dict(model=SOLVED_MODEL,
-                   rule='every other weeks 1-5 spread: a smaller disagreement, or the ensemble not '
+                   rule='every other weeks 1-8 spread: a smaller disagreement, or the ensemble not '
                         'agreeing with itself',
-                   record='51.6% of 459 would-be picks, -1.4% per bet', worth='-0.5u a season on ~35 picks',
-                   eras='50 / 54 / 44 / 58%',
+                   record='weeks 1-5: 51.6% of 459, -1.4% per bet; weeks 6-8 with SD above 4.0: 45.9% of 181, '
+                          '-12.5% per bet',
+                   worth='-2.2u a season on ~49 picks',
+                   eras='wk1-5 50 / 54 / 44 / 58%, wk6-8 42 / 46 / 56 / 42%',
                    note='Fixing the taper lifts the whole early-season slate, but only the corner where the '
                         'model both disagrees loudly and agrees with itself clears the bar. The rest is '
                         'a point above break-even before vig and a point below it after -- which is still '
@@ -1535,17 +1553,14 @@ def tier_guide(running=None, standalone=False):
             '<table class="tier-table"><thead><tr><th></th><th>Bucket</th><th>Model</th><th>Measured</th>'
             '<th>Worth</th><th>How often</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
             + rows + '</tbody></table>')
-    gaps = ('<p class="tier-gap">Spreads have no bucket in weeks 6-12, and that is a finding rather '
-            'than an oversight. Five independent searches have looked: an exhaustive hit-rate grid, an '
-            'error-surface search over the same dimensions, the same search with absolute rather than '
-            'percentile cuts, a nine-arm sweep of the sided-spread architecture, and a gate-first search '
-            'that added the size of the posted line. Three cells in all of that cleared the era and '
-            'halves gates, and all three fell apart on a second model (worst sibling 47-51%) while '
-            'paying about half a unit a season. The pattern fits: weeks 1-3 are exploitable because the '
-            'model is carrying stale priors, week 13 on because playoff leverage distorts what teams are '
-            'playing for, and weeks 6-12 is the stretch where the model has plenty of information and so '
-            'does the market. The one thing that has ever opened a closed window here was changing the '
-            'model, not filtering it harder. Totals are covered in every week.</p>')
+    gaps = ('<p class="tier-gap">Spreads have no bucket in weeks 9-12, and that is a finding rather '
+            'than an oversight. On the default model five independent searches looked across weeks 6-12 -- '
+            'an exhaustive hit-rate grid, an error-surface search, absolute rather than percentile cuts, a '
+            'nine-arm sweep of the sided-spread architecture, and a gate-first search that added the size of '
+            'the posted line -- and nothing survived a second model. What finally opened weeks 6-8 was '
+            'changing the model, not filtering it harder: the solved stat taper (bucket below) reads 60.5% '
+            'there with the same cuts as its weeks 1-5 bucket, and 53.1% in weeks 9-12, short of the floor. '
+            'Totals are covered in every week.</p>')
     bands = ', '.join(f'{tier} = {BAND_LABELS[tier]}' for tier, _ in TIER_BANDS)
     bottom = ('<p class="tier-note">All six buckets together: about 59 picks a season for +7.6 units at one '
               'unit a bet, up in 15 of the 16 backtested seasons (worst -4.0u in 2014, best +18.2u in 2023). '
@@ -2352,6 +2367,9 @@ def refresh_weather(season, week, forecast_file=None):
         print(f'Refresh: observed-weather top-up failed ({error}); keeping the existing '
               'data/weather/historical_features.parquet.', flush=True)
     output = Path(forecast_file or 'data/weather/forecasts.parquet')
+    import data_crunchski_3 as dc3
+    freed = dc3.unlock_forecasts(season, week)
+    print(f'Refresh: unlocked the forecast for {freed} game(s); this build locks the new one.', flush=True)
     try:
         print(f'Refresh: pulling a live forecast for {season} wk{week}...', flush=True)
         games = pull_weather.scheduled_games(season, week, 'live', decision_hours=24)
@@ -2460,6 +2478,11 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--jobs', type=int)
+    parser.add_argument('--relock-weather', action='store_true',
+                        help="Pull a fresh forecast for this week and use it instead of the locked one. Without "
+                             "this, a rerun reuses the forecast the week's first build locked "
+                             "(data/weather/forecast_lock.parquet), so the same inputs give the same picks. "
+                             "--refresh does this too.")
     parser.add_argument('--weather-file', help='Two-sided only: historical/reanalysis weather')
     parser.add_argument('--forecast-file', help='Two-sided only: fallback for a target week with no historical '
                         'weather yet (i.e. not played yet) -- pull it first with pull_weather.py --season ... '
@@ -2475,6 +2498,8 @@ if __name__ == '__main__':
         if args.refresh:
             refresh_inputs(args.season, args.week, shared=args.model != 'neural',
                            forecast_file=args.forecast_file)
+        elif args.relock_weather:
+            refresh_weather(args.season, args.week, args.forecast_file)
         if args.model != 'neural':
             from shared_scoring import two_sided_packet
             two_sided_packet(args.season, args.week, args.lookback, args.train_window, args.iterations,
