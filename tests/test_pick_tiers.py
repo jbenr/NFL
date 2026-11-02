@@ -134,11 +134,11 @@ class StatFormatTests(unittest.TestCase):
                               'off_first_down_pp': [.333], 'off_turnovers_pp': [.016],
                               'off_pass_ypp': [6.6]})
         cell = lambda metric: re.sub(r'<[^>]+>', '', wp.stat_cell(stats, 'SF', 'off', metric))
-        self.assertEqual(cell('pass_epa_pp'), '+0.153(#1)')
-        self.assertEqual(cell('run_epa_pp'), '-0.020(#1)')
-        self.assertEqual(cell('first_down_pp'), '33.3%(#1)')   # a real per-play rate
-        self.assertEqual(cell('turnovers_pp'), '1.6%(#1)')
-        self.assertEqual(cell('pass_ypp'), '6.6(#1)')
+        self.assertEqual(cell('pass_epa_pp'), '+0.153 (#1)')
+        self.assertEqual(cell('run_epa_pp'), '-0.020 (#1)')
+        self.assertEqual(cell('first_down_pp'), '33.3% (#1)')   # a real per-play rate
+        self.assertEqual(cell('turnovers_pp'), '1.6% (#1)')
+        self.assertEqual(cell('pass_ypp'), '6.6 (#1)')
 
     def test_every_points_metric_is_declared(self):
         for metric in wp.POINTS_PER_PLAY:

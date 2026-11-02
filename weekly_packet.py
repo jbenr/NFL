@@ -509,7 +509,7 @@ def stat_cell(stats, team, unit, metric, rank_before=False):
         ascending = unit == 'def'  # Offense higher first; defense lower first.
     rank = values.rank(method='min', ascending=ascending).loc[team]
     badge = f'<span class="rank">(#{int(rank)})</span>'
-    return badge + ' ' + formatted if rank_before else formatted + badge
+    return badge + ' ' + formatted if rank_before else formatted + ' ' + badge
 
 
 def point_bar(value, scale, row, left_team=None):
@@ -680,8 +680,9 @@ def matchup_attribution(row, stats, panel, shared=False, differential=False):
         away_unit, home_unit = ('off', 'def') if prefix == 'away_off_' else ('def', 'off')
         for feature in features:
             metric = feature[len(prefix):]
-            cells = [stat_cell(stats, row.away_team, away_unit, metric),
-                     stat_cell(stats, row.home_team, home_unit, metric, rank_before=True)]
+            # Ranks sit on the outside: "(#1) 100" for away, "100 (#1)" for home.
+            cells = [stat_cell(stats, row.away_team, away_unit, metric, rank_before=True),
+                     stat_cell(stats, row.home_team, home_unit, metric)]
             label = pretty(metric)
             value = values[feature]
             rows.append(f'<div class="stat-row"><div class="stat-line"><div class="stat-name">{escape(label)}</div><div class="stat-number">{cells[0]}</div>'
