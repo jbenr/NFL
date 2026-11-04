@@ -51,6 +51,18 @@ class TierTests(unittest.TestCase):
         self.assertEqual(wp.pick_tier('total', week=16, sd=5., line=50.),
                          tier_for('total', 16, sd=5., line=50.))
 
+    def test_the_weeks_9_to_12_spread_bucket_fires_only_on_its_own_model(self):
+        """Shipped by choice on 2026-11-04 (56.2%, B band): weeks 9-12, edge
+        >= 2, SD <= 4.0, and only on the 10-week-lookback solved model."""
+        lb10 = wp.SOLVED10_MODEL
+        self.assertEqual(wp.pick_tier('spread', week=10, sd=3.8, edge=2.5, running=lb10), 'B')
+        self.assertEqual(wp.pick_tier('spread', week=9, sd=4.0, edge=2.0, running=lb10), 'B')
+        self.assertIsNone(wp.pick_tier('spread', week=10, sd=4.2, edge=5., running=lb10))   # SD too high
+        self.assertIsNone(wp.pick_tier('spread', week=10, sd=3., edge=1.5, running=lb10))   # edge too small
+        self.assertIsNone(wp.pick_tier('spread', week=13, sd=3., edge=5., running=lb10))    # out of window
+        self.assertIsNone(wp.pick_tier('spread', week=10, sd=3., edge=5.))                  # default model
+        self.assertIsNone(wp.pick_tier('spread', week=10, sd=3., edge=5., running=wp.SOLVED_MODEL))
+
     def test_a_tierless_game_is_not_a_pick_however_big_the_edge(self):
         """A catch-all tier used to make every qualifying disagreement a
         graded pick; those measured 49.1%, so they are no bet at all now."""
@@ -188,7 +200,12 @@ class ProfileTests(unittest.TestCase):
         for week in [1, 3, 5, 6, 8]:
             self.assertEqual(model_spec.owner('spread', week), model_spec.SOLVED_PROFILE)
             self.assertEqual(model_spec.owner('total', week), model_spec.DEFAULT_PROFILE)
-        for week in [9, 12, 13, 22]:
+        # Weeks 9-12 go to the same preset on a 10-week lookback (a bucket
+        # shipped by choice, 2026-11-04); from week 13 the default owns it.
+        for week in [9, 10, 11, 12]:
+            self.assertEqual(model_spec.owner('spread', week), model_spec.SOLVED10_PROFILE)
+            self.assertEqual(model_spec.owner('total', week), model_spec.DEFAULT_PROFILE)
+        for week in [13, 22]:
             self.assertEqual(model_spec.owner('spread', week), model_spec.DEFAULT_PROFILE)
 
     def test_every_owning_profile_has_buckets_to_justify_it(self):

@@ -697,13 +697,24 @@ def two_sided_season(args):
         regular = sorted(history.loc[history.game_type.eq('REG'), 'week_id'].unique())
         if len(regular) < args.train_window:
             raise ValueError(f'{season} wk{week}: insufficient pregame training history')
+        # Resume: a week already written by an earlier attempt of this same
+        # run (the folder is a hash of the settings) is loaded, not refit.
+        # Long sweeps do die mid-way, and refitting finished weeks is hours.
+        week_file = output / f'{season}_wk{week:02d}.parquet'
+        importance_file = output / f'{season}_wk{week:02d}_importance.csv'
+        if week_file.exists() and importance_file.exists():
+            results.append(pd.read_parquet(week_file))
+            importances.append(pd.read_csv(importance_file, index_col='feature')['importance'])
+            print(f'{season} wk{week}: already done, loaded', flush=True)
+            continue
         data = pd.concat([history[history.week_id >= regular[-args.train_window]], target]).sort_values(KEY)
         details, importance = ss.fit_two_sided(data, int(season), int(week), args.iterations, args.epochs,
                                                args.seed, args.jobs, objective)
         importances.append(importance.set_index('feature')['importance'])
         result = target.merge(details, on=['away_team', 'home_team'], validate='one_to_one')
         results.append(result)
-        utils.save_parquet(result, output / f'{season}_wk{week:02d}.parquet')
+        importance.set_index('feature')['importance'].to_csv(importance_file)
+        utils.save_parquet(result, week_file)
         # Only print what this objective actually forecasts. The margin
         # objective has no scores and no total, so those columns were four
         # of eight and every one of them NaN; what it does have is the two

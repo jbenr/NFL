@@ -1295,6 +1295,12 @@ TIER_MODEL = 'Model 2.0 · weighted'   # the model the packet builds today
 # real, but not enough to bet.
 SHARED_MODEL = 'Model 2.1 · shared'
 SOLVED_MODEL = 'Model 2.0 · solved'
+# Weeks 9-12 spreads. Unlike every other bucket here, this one did NOT pass
+# the gauntlet: it is the best of ~200 cells across four new runs, one era
+# loses, and the joint shuffled null matches it about half the time. It is on
+# the sheet because Jim chose to bet the window rather than leave it blank
+# (2026-11-04). Treat its rate as optimistic and its live record as the test.
+SOLVED10_MODEL = 'Model 2.0 · solved lb10'
 # A bucket is measured on ONE model and only fires on that model. This is not
 # bookkeeping: the weeks 1-12 spread band below is 54.9% on the shared model
 # and 47-49% on all five two-sided runs, so applying it to the wrong one turns
@@ -1361,6 +1367,26 @@ PICK_BUCKETS = {
                   '52%; and the SD effect is not a slope -- the 3.5-4.0 band carries it (64%) while under 3.5 '
                   'is 53%. One model, one run: bet it flat.'),
     ]),
+    'spread_solved10': dict(edge=2.0, buckets=[
+        dict(rule='weeks 9-12, the model off the spread by 2 or more, ensemble SD at most 4.0',
+             test=lambda week, importance, sd, line, edge: (9 <= week <= 12 and edge is not None
+                                                            and abs(edge) >= 2
+                                                            and sd is not None and sd <= 4.0),
+             model=SOLVED10_MODEL, rate=.562, n=192, worth='+1.1u a season on ~15 picks, up 9 of 13 years',
+             frequency='15 a season · about 3.7 a week across the 4 weeks it can fire',
+             eras='44 / 73 / 52 / 59%',
+             siblings='unproven: the joint shuffled null matches it in 49% of tries; 2.1 solved on the same '
+                      'cuts 52.2%',
+             note='A judgement call, not a finding -- the one bucket on the board that failed the test the '
+                  'others passed. Weeks 9-12 spreads were searched on about 23 runs and nothing cleared it; '
+                  'this is the best cell of four runs built for the window (2013-2025 backtest: the solved '
+                  'taper on a 10-week stat lookback). Same cuts as the weeks 6-8 bucket, so nothing new was '
+                  'fitted. What argues for it: halves 56 / 56%, and the SD cut is doing real sorting -- the '
+                  'same weeks with SD above 4.0 are 46.8%. What argues against it: 2013-16 is 44%, 2017-19 '
+                  'carries it at 73%, week 11 alone is 44%, and searching for the best cell found one this '
+                  'good on shuffled outcomes about half the time. Bet it flat, at the smallest unit, and let '
+                  'the live record decide.'),
+    ]),
     'total': dict(edge=5.0, buckets=[
         # Ordered, and each rate is measured on what the buckets above it
         # leave behind -- a rule that looks strong standalone can be living
@@ -1424,6 +1450,12 @@ NO_PICK = {
                         'model both disagrees loudly and agrees with itself clears the bar. The rest is '
                         'a point above break-even before vig and a point below it after -- which is still '
                         'a different animal from the default model here, where the same games are 50.1%.'),
+    'spread_solved10': dict(model=SOLVED10_MODEL,
+                   rule='every other weeks 9-12 spread: the ensemble not agreeing with itself (SD above 4.0)',
+                   record='46.8% of 297 would-be picks, -10.7% per bet', worth='-2.4u a season on ~23 picks',
+                   eras='47 / 47 / 48 / 44%',
+                   note='Losing in every era, which is the strongest thing the weeks 9-12 data says: when this '
+                        'model disagrees with itself in mid-season, it is wrong more often than a coin.'),
     'spread': dict(model=TIER_MODEL, rule='every other spread: any week before 13, and late games with '
                                           'nothing riding on them',
                    record='49.8% of 2599 would-be picks, -4.9% per bet', worth='-8.0u a season on ~162 picks',
@@ -1468,7 +1500,8 @@ def market_key(market, running=None):
     filter then finds nothing, which is the right answer for a model with no
     measured edge."""
     own = {SHARED_MODEL: f'{market}_shared',
-           SOLVED_MODEL: f'{market}_solved'}.get(running or TIER_MODEL)
+           SOLVED_MODEL: f'{market}_solved',
+           SOLVED10_MODEL: f'{market}_solved10'}.get(running or TIER_MODEL)
     return own if own in PICK_BUCKETS else market
 
 
@@ -1554,16 +1587,19 @@ def tier_guide(running=None, standalone=False):
             '<table class="tier-table"><thead><tr><th></th><th>Bucket</th><th>Model</th><th>Measured</th>'
             '<th>Worth</th><th>How often</th><th>By era</th><th>Other runs</th></tr></thead><tbody>'
             + rows + '</tbody></table>')
-    gaps = ('<p class="tier-gap">Spreads have no bucket in weeks 9-12, and that is a finding rather '
-            'than an oversight. On the default model five independent searches looked across weeks 6-12 -- '
+    gaps = ('<p class="tier-gap">Weeks 9-12 spreads have a bucket now, but read it as a bet on a hunch '
+            'rather than a measured edge. Before it, the window was searched hard and came up empty. On the default model five independent searches looked across weeks 6-12 -- '
             'an exhaustive hit-rate grid, an error-surface search, absolute rather than percentile cuts, a '
             'nine-arm sweep of the sided-spread architecture, and a gate-first search that added the size of '
             'the posted line -- and nothing survived a second model. What finally opened weeks 6-8 was '
             'changing the model, not filtering it harder: the solved stat taper (bucket below) reads 60.5% '
             'there with the same cuts as its weeks 1-5 bucket, and 53.1% in weeks 9-12, short of the floor. '
-            'Totals are covered in every week.</p>')
+            'Four more runs were then built for weeks 9-12 alone (opponent-adjusted stats, EPA inputs, a '
+            '10-week lookback); no cell passed the era and shuffled-outcome tests, and the weeks 9-12 bucket '
+            'is the best of them, shipped by choice. Totals are covered in every week.</p>')
     bands = ', '.join(f'{tier} = {BAND_LABELS[tier]}' for tier, _ in TIER_BANDS)
-    bottom = ('<p class="tier-note">All six buckets together: about 59 picks a season for +7.6 units at one '
+    bottom = ('<p class="tier-note">The six measured buckets together (the weeks 9-12 spread bucket, '
+              'shipped on weaker evidence, would add about 15 picks and +1.1 units a season on its backtest): about 59 picks a season for +7.6 units at one '
               'unit a bet, up in 15 of the 16 backtested seasons (worst -4.0u in 2014, best +18.2u in 2023). '
               'The two S buckets in weeks 13-14 and the playoffs are half of that on a quarter of the picks, '
               'and the thinnest bucket is 8% of it. A bucket only pays what its hit rate earns times how '

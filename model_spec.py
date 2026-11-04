@@ -92,14 +92,26 @@ PROFILES = {
     # keeps that market.
     'Model 2.0 · solved': dict(version='2.0', architecture='two-sided', inputs=None,
                                lookback=20, train_window=100, calculation='solved'),
+    # The solved preset on a 10-week stat lookback instead of 20. Owns weeks
+    # 9-12 spreads only, where every other run measured nothing. Its bucket is
+    # a judgement call, not a finding: 56.2% of 192, but the 2013-16 era is 44%
+    # and the shuffled-outcome null over the grid it was picked from matches it
+    # about half the time (p = 0.49). Shipped by choice on 2026-11-04 to be
+    # bet flat and watched live -- see weekly_packet.SOLVED10_MODEL.
+    'Model 2.0 · solved lb10': dict(version='2.0', architecture='two-sided', inputs=None,
+                                    lookback=10, train_window=100, calculation='solved'),
 }
 DEFAULT_PROFILE = 'Model 2.0 · weighted'
 SHARED_PROFILE = 'Model 2.1 · shared'
 SOLVED_PROFILE = 'Model 2.0 · solved'
+SOLVED10_PROFILE = 'Model 2.0 · solved lb10'
 # Weeks the solved preset owns the spread. Measured on 2013-2025: weeks 1-5
 # (58.5%) and weeks 6-8 (60.5%, edge >= 2 and SD <= 4.0). Weeks 9-12 were
 # backtested too and stayed at 53% -- no bucket -- so the window stops at 8.
 SOLVED_SPREAD_WEEKS = range(1, 9)
+# Weeks 9-12 spreads: the same preset on a 10-week lookback (56.2%, weak
+# evidence -- see the profile's note).
+SOLVED10_SPREAD_WEEKS = range(9, 13)
 # Where each profile's measured edge is. The shared architecture is 54.9% on
 # weeks 1-12 spreads and 49.6% from week 13 (43.0% in weeks 13-14, which is
 # the two-sided model's best window), so they split the season rather than
@@ -129,9 +141,12 @@ def owner(market, week):
 
     Spreads through week 8 now go to SOLVED_PROFILE, which is the same model
     with the recency taper fixed -- the first thing to beat the market on a
-    spread before week 13."""
+    spread before week 13. Weeks 9-12 go to SOLVED10_PROFILE, the same preset
+    on a 10-week lookback, on a bucket shipped by choice rather than proof."""
     if market == 'spread' and int(week) in SOLVED_SPREAD_WEEKS:
         return SOLVED_PROFILE
+    if market == 'spread' and int(week) in SOLVED10_SPREAD_WEEKS:
+        return SOLVED10_PROFILE
     return DEFAULT_PROFILE
 
 

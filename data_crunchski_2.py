@@ -1016,8 +1016,9 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='mea
     git history / conversation notes if you need the exact old (buggy)
     behavior back."""
     global _WORK
-    if calculation not in ['mean', 'median', *DECAY_PRESETS]:
-        raise ValueError(f"calculation must be one of ['mean', 'median', {', '.join(DECAY_PRESETS)}], got {calculation!r}")
+    if calculation not in ['mean', 'median', *DECAY_PRESETS, *ADJUSTED_PRESETS]:
+        raise ValueError(f"calculation must be one of ['mean', 'median', "
+                         f"{', '.join([*DECAY_PRESETS, *ADJUSTED_PRESETS])}], got {calculation!r}")
     sources = [__file__, 'utils.py', 'data/sched.parquet'] + list(Path('data/pbp').glob('pbp_*.parquet'))
     cached = utils.cache_path('features', [szn, week, lookback, history_weeks, calculation, use_scaling], sources)
     if cached.exists():
