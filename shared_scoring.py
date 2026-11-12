@@ -235,12 +235,24 @@ def fit_two_sided(panel, season, week, iterations=100, epochs=100, seed=1337, jo
               'scores cached', flush=True)
         return pd.read_parquet(cached), pd.read_parquet(importance_path)
     n_features = len(target.attrs['model_features'])
-    with parallel_config(backend='loky', n_jobs=min(jobs, iterations), inner_max_num_threads=1):
-        runs = list(tqdm(Parallel(return_as='generator', initializer=initialize_worker)(
-            delayed(fit_member)(i, x, y, xp, seed, epochs, n_features, len(target.attrs['context_names']))
-            for i in range(iterations)),
-            total=iterations, desc=f'{"Sided-spread" if objective == "margin" else "Two-sided"} '
-                                   f'({season} wk{week})'))
+    from joblib.externals.loky.process_executor import TerminatedWorkerError
+    # Same random worker crash as the crunch (see data_crunchski_2.prep_test_train).
+    # Each member is seeded by its index, so refitting from scratch gives the
+    # same answer -- a retry costs time, never changes the picks.
+    attempts = int(os.environ.get('NFL_FIT_RETRIES') or 3)
+    for attempt in range(1, attempts + 1):
+        try:
+            with parallel_config(backend='loky', n_jobs=min(jobs, iterations), inner_max_num_threads=1):
+                runs = list(tqdm(Parallel(return_as='generator', initializer=initialize_worker)(
+                    delayed(fit_member)(i, x, y, xp, seed, epochs, n_features, len(target.attrs['context_names']))
+                    for i in range(iterations)),
+                    total=iterations, desc=f'{"Sided-spread" if objective == "margin" else "Two-sided"} '
+                                           f'({season} wk{week})'))
+            break
+        except TerminatedWorkerError:
+            if attempt == attempts:
+                raise
+            print(f'\n  ⚠️ a training worker crashed (attempt {attempt} of {attempts}); refitting', flush=True)
     count = len(target)
     scores = np.stack([r[0] for r in runs]) + offset
     away, home = scores[:, :count], scores[:, count:]
@@ -576,8 +588,24 @@ def two_sided_packet(season, week, lookback=None, train_window=None, iterations=
         other_data = training_slice(prepared(settings), settings)
         _, other_details, other_importance = fit_profile(
             other_data, season, week, settings, iterations, epochs, seed, jobs or min(iterations, 8))
+        # Its own spec (training span, lookback, preset, input set), so the
+        # Specs tab describes the model that actually made this column.
+        other_target = other_data[(other_data.season == season) & (other_data.week == week)]
+        other_wid = int(other_target.week_id.iloc[0])
+        was = model_spec.VERSION
+        try:
+            model_spec.select(settings['version'])
+            other_spec = model_spec.spec(
+                season=season, week=week, lookback=settings['lookback'], train_window=settings['train_window'],
+                iterations=iterations, epochs=epochs, seed=seed, calculation=settings['calculation'],
+                training=other_data[(other_data.week_id < other_wid) & other_data.away_score.notna()
+                                    & other_data.home_score.notna()],
+                features=[c for c in dc3.two_sided_rows(other_target) if c not in BASE_CONTEXT],
+                weather_file=weather_file, forecast_file=forecast_file)
+        finally:
+            model_spec.select(was)
         sources[market] = (other_details, other_importance, dict(
-            config, model=f'{name} · {iterations} members', tier_model=name,
+            config, spec=other_spec, model=f'{name} · {iterations} members', tier_model=name,
             feature_calculation=settings['calculation'], lookback=settings['lookback'],
             train_window=settings['train_window'],
             reason=f'{market.title()} picks this week come from {name}, the profile whose backtest measured '

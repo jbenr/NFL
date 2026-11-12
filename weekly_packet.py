@@ -63,7 +63,6 @@ main.pkgpanel{order:2;flex:1 0 100%;display:none}
 #pt-headline:checked~.pkgpanel[data-tab=headline]{display:block}
 #pt-spread:checked~.pkgpanel[data-tab=spread]{display:block}
 #pt-total:checked~.pkgpanel[data-tab=total]{display:block}
-#pt-importance:checked~.pkgpanel[data-tab=importance]{display:block}
 .headline-frame{width:100%;height:80vh;border:0;background:white}
 main.headline-shell{max-width:1500px}
 /* The sheet sizes itself to its columns (.headline-table{width:auto}), so
@@ -315,13 +314,22 @@ table.stats-table{display:grid;width:max-content;max-width:none}
 /* Raw/Model toggle -- CSS-only :checked~sibling trick, same idea as the
    packet bundle's own tabs; no JS round-trip since this is a static file. */
 .stats-mode-radio{display:none}
-.stats-mode-label{display:inline-block;font:12px Arial,sans-serif;padding:6px 14px;border:1px solid #41464e;color:#aeb8c3;cursor:pointer}
-.stats-mode-label:first-of-type{border-radius:4px 0 0 4px}
-.stats-mode-label:last-of-type{border-radius:0 4px 4px 0;border-left:0}
-.stats-mode-radio:checked+.stats-mode-label{background:#1a1d21;color:#fff}
+.stats-mode-label{display:inline-block;font:12px Arial,sans-serif;padding:6px 12px;margin:0 6px 6px 0;border:1px solid #41464e;border-radius:4px;color:#aeb8c3;cursor:pointer}
+.stats-mode-radio:checked+.stats-mode-label{background:#1a1d21;color:#fff;border-color:#8fc9ef}
 .stats-view{display:none}
-#stats-mode-raw:checked~#stats-view-raw{display:block}
-#stats-mode-model:checked~#stats-view-model{display:block}
+.stats-intro{margin:0 0 10px;font:12px/1.45 Arial,sans-serif;color:#9ba8b5}
+.stats-note{margin:4px 0 0;font:12px/1.45 Arial,sans-serif;color:#b7c0c9}
+/* Specs tab: compact tables, one card per topic. */
+.spec-table{width:100%;border-collapse:collapse;font:12px/1.4 Arial,sans-serif}
+.spec-table th{text-align:left;font-weight:600;color:#9ba8b5;border-bottom:1px solid #41464e;padding:4px 10px 4px 0}
+.spec-table td{text-align:left;vertical-align:top;padding:5px 10px 5px 0;border-bottom:1px solid #23272c;color:#c7ced5}
+.spec-table .num{white-space:nowrap}
+.spec-sub{font:13px Graduate,Georgia,serif;color:#e3e6e9;margin:14px 0 4px}
+.spec-small{margin:6px 0 0;font:12px/1.45 Arial,sans-serif;color:#8e99a5}
+.spec-card details{margin-top:8px;font:12px/1.45 Arial,sans-serif;color:#b7c0c9}
+.spec-card details summary{cursor:pointer;color:#9ba8b5}
+.spec-imp{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:4px 24px}
+.spec-imp .importance-scroll{max-height:300px}
 .banner-team .team-copy{display:flex;flex-direction:column}.banner-qb{font:11px/1.4 Arial,sans-serif;color:#aaa;white-space:normal;margin-top:4px}
 .packet .pill.pick{background:#cfd5db;color:#222}.pill.pick.tier-S{background:#e3c4ff}.pill.pick.tier-A{background:#b9e4c4}.sheet-notes{border-top:1px solid #333;margin-top:28px;padding-top:12px}.sheet-notes summary{cursor:pointer;font:15px Graduate,Georgia,serif}
 .sheet-notes p{font-size:13px;line-height:1.5;color:#c8cdd3;margin:10px 0}.sheet-notes strong{color:#eee}
@@ -393,30 +401,73 @@ def lookback_span(season, week, lookback):
     return weeks.loc[start:]
 
 
-def lookback_description(season, week, lookback):
-    """Plain-English methodology note for the Stats tab -- what the
-    rolling window actually covers (with the real week range) and what QB
-    Elo means, since "(#1) is best" alone doesn't say much."""
+def window_text(season, week, lookback):
+    """'2025 wk 17 – 2026 wk 9': the stretch a lookback covers, playoffs
+    caught inside it included (they don't count toward the lookback)."""
     span = lookback_span(season, week, lookback)
     if span.empty:
-        return ''
-    (first_season, first_week), (last_season, last_week) = span.index[0], span.index[-1]
-    span_text = (f'{int(first_season)} Week {int(first_week)} through {int(last_season)} Week {int(last_week)}'
-                if first_season != last_season else f'{int(first_season)} Weeks {int(first_week)}–{int(last_week)}')
-    playoff_weeks = int((~span).sum())
-    playoff_note = (f' {playoff_weeks} of those are playoff weeks -- included in the numbers below, but they '
-                    f'don\'t themselves count as one of the {lookback}.' if playoff_weeks else '')
-    return ('<details><summary>How these stats are calculated</summary>'
-           f'<p>A {lookback}-week rolling lookback of regular-season games, counted backward from this week '
-           f'({span_text}).{playoff_note} Every rate here is an unweighted, observed average over that window -- '
-           'not a model input (the model itself uses a separately recency-weighted, standardized version of these '
-           'same underlying stats). QB Elo is a recency-weighted rating of that quarterback\'s own game production '
-           '(not the team\'s win/loss record); under Defense it\'s the same rating averaged over the opposing '
-           'QBs actually faced, i.e. strength of the passing competition seen so far. (#1) is best; click a '
-           'column header to sort by rank.</p>'
-           '<p>Raw: flat average over the lookback window. Model: the same plays, weighted the way the model '
-           'itself weighs them (recent games count more). QB Elo is already recency-weighted either way, '
-           'so it doesn\'t change between the two.</p></details>')
+        return 'no games yet'
+    (s0, w0), (s1, w1) = span.index[0], span.index[-1]
+    return (f'{int(s0)} wk {int(w0)} – {int(s1)} wk {int(w1)}' if s0 != s1
+            else f'{int(s0)} wks {int(w0)}–{int(w1)}')
+
+
+# Short names and one-line descriptions for the stat recency presets, used on
+# the Stats and Specs tabs. Presets missing here fall back to their decay
+# numbers (calculation_text).
+CALCULATION_NAMES = {'mean': 'Raw', 'weighted': 'Weighted', 'solved': 'Solved', 'steep': 'Steep',
+                     'carryover': 'Carryover', 'importance': 'Importance', 'gradual': 'Gradual',
+                     'adjusted_1.0': 'Opponent-adjusted'}
+
+
+def calculation_text(calculation):
+    """How a preset pools a team's games over the lookback, in one line."""
+    import data_crunchski_2 as dc
+    if calculation in (None, 'mean'):
+        return 'every game in the window counts the same'
+    if calculation == 'solved':
+        return (f'every game this season counts the same; a last-season game counts '
+                f'{dc.SOLVED_PRIOR_RATIO:.2f} of one')
+    if calculation in dc.ADJUSTED_PRESETS:
+        return 'opponent-adjusted by weighted least squares, recent and high-volume games weighted up'
+    preset = dc.DECAY_PRESETS.get(calculation)
+    if not preset:
+        return str(calculation)
+    text = (f'recent games count more (decay over {preset["total_season_days"]} days, steepness '
+            f'{preset["steepness"]:g}, floor {preset["floor_weight"]:g})')
+    if calculation in ('carryover', 'importance'):
+        text += '; last-season games halved'
+    if calculation in dc.IMPORTANCE_WEIGHT:
+        text += '; scaled by playoff leverage'
+    return text
+
+
+def stats_views(season, week, configs):
+    """Every stats version the sheet uses, for the Stats tab's switch: a raw
+    (flat-average) view for each lookback in play, plus each model's own
+    weighting. configs: {market: that market's saved config}. Spread first,
+    so the spread model's window leads."""
+    used = {}
+    for market in ['spread', 'total']:
+        config = configs.get(market)
+        if not config:
+            continue
+        calc = (config.get('feature_calculation')
+                if config.get('calculation') in ('two-sided-team-points-v1', model_spec.ID) else None)
+        used.setdefault(int(config['lookback']), {}).setdefault(calc or 'mean', []).append(market)
+    views = []
+    for lookback, calcs in used.items():
+        window = window_text(season, week, lookback)
+        for calc in ['mean'] + [c for c in calcs if c != 'mean']:
+            markets = calcs.get(calc, [])
+            owner = (' · ' + ' + '.join('totals' if m == 'total' else m for m in markets)) if markets else ''
+            views.append(dict(key=f'{re.sub(r"[^a-z0-9]", "", calc)}{lookback}',
+                              label=f'{CALCULATION_NAMES.get(calc, calc.title())} {lookback} wk{owner}',
+                              frame=display_stats(season, week, lookback, calc),
+                              note=f'{lookback} regular-season weeks ({window}): {calculation_text(calc)}.'
+                                   + (f' The {" and ".join("totals" if m == "total" else m for m in markets)} '
+                                      f'model’s weighting.' if markets else '')))
+    return views
 
 
 def display_stats(season, week, lookback, calculation='mean'):
@@ -781,18 +832,14 @@ STAT_GROUPS = [
 ]
 
 
-def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_stats=None):
-    """League snapshot display ranks; no new fits or alternative model inputs.
-    season/week/lookback (all three, or none) drive the "How these stats are
-    calculated" methodology dropdown -- optional since some callers/tests
-    only have the stats/games frames, not a real week to look up against
-    data/sched.parquet. weighted_stats: same shape as `stats` but computed
-    with the model's own recency decay (display_stats(..., calculation=
-    'steep')) instead of a flat average -- when given, adds a Raw/Model
-    toggle (CSS-only, no JS) instead of showing only the raw view. Column
-    sorting is CSS-only too (see metric_table/sort_css)."""
-    if stats.empty:
-        return '<p class="muted">No pregame league snapshot available.</p>'
+def stats_tables(views, games):
+    """League snapshot display ranks; no new fits.
+
+    views: one dict per stats version the sheet uses -- key (html-safe id),
+    label (the switch button), frame (display_stats output) and note (one
+    line on what the version is). See stats_views(). A CSS-only switch
+    picks between them; column sorting is CSS-only too (see metric_table/
+    sort_css)."""
     names = {}
     sort_columns = {}  # table key -> column count, filled in by metric_table
     for side in ['away', 'home']:
@@ -850,10 +897,10 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
                 ranked = sorted(range(len(rows)), key=lambda r: rows[r][1][i], reverse=reverse)
                 for position, r in enumerate(ranked, 1):
                     positions[r].append(f'--{direction}{i + 1}:{position}')
-        # Raw and Model render the same table twice (ids off-passing-raw /
-        # off-passing-model) -- they share one set of radios, keyed without
-        # the suffix, so flipping the toggle keeps whatever sort you picked.
-        key = re.sub(r'-(raw|model)$', '', table_id)
+        # Every stats version renders the same table (ids off-passing--raw10,
+        # off-passing--solved10, ...) -- they share one set of radios, keyed
+        # without the suffix, so switching versions keeps whatever sort you picked.
+        key = table_id.split('--')[0]
         sort_columns[key] = len(heads)
         # Every stats table scrolls after ~10 rows instead of stretching the
         # page -- 32 teams is a lot of scrolling either way, so keep it
@@ -886,13 +933,11 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
 
     def build_view(stats, id_suffix):
         stats = stats.drop_duplicates('team').sort_values('team')
-        view = ''
+        # QB Elo leads each view: it depends on the lookback window (a
+        # 10-week and a 20-week view differ), though not on the weighting.
+        view = f'<h3>QB Elo</h3>{metric_table(stats, "off", ["qb_elo"], f"qb-elo--{id_suffix}", quarterback_column=True)}'
         for section_label, unit in [('Offense', 'off'), ('Defense', 'def')]:
-            # QB Elo isn't part of this grid anymore -- it's shown once,
-            # above Offense, outside the Raw/Model toggle entirely (see
-            # below): it doesn't change between the two, so there's no
-            # second copy of it to toggle.
-            tables = [(group_label, metric_table(stats, unit, metrics, f'{unit}-{group_label.lower()}-{id_suffix}'))
+            tables = [(group_label, metric_table(stats, unit, metrics, f'{unit}-{group_label.lower()}--{id_suffix}'))
                      for group_label, metrics in STAT_GROUPS]
             # Stacked one per row (Passing, Rushing, Misc) -- each table
             # sizes to its own content (see .stats-table/.stats-grid CSS),
@@ -901,27 +946,23 @@ def stats_tables(stats, games, season=None, week=None, lookback=None, weighted_s
             view += f'<h2>{section_label}</h2><div class="stats-grid">{cells}</div>'
         return view
 
-    if season is not None and week is not None and lookback is not None:
-        result = lookback_description(season, week, lookback)
-    else:
-        result = '<p class="muted">Pregame league snapshot · observed rates · (#1) is best. Click a stat to sort by rank.</p>'
-    # QB Elo above everything, own row, never toggled between raw/model
-    # (already recency-weighted regardless, so there's nothing to toggle).
-    raw_stats = stats.drop_duplicates('team').sort_values('team')
-    result += f'<h3>QB Elo</h3>{metric_table(raw_stats, "off", ["qb_elo"], "qb-elo", quarterback_column=True)}'
-    if weighted_stats is not None and not weighted_stats.empty:
-        # CSS-only toggle -- same :checked~sibling trick as the packet
-        # bundle's tabs, no JS needed. Radios/labels/views must all be flat
-        # siblings for the ~ combinator to reach across them.
-        result += ('<input type="radio" name="stats-mode" id="stats-mode-raw" class="stats-mode-radio" checked>'
-                  '<label for="stats-mode-raw" class="stats-mode-label">Raw</label>'
-                  '<input type="radio" name="stats-mode" id="stats-mode-model" class="stats-mode-radio">'
-                  '<label for="stats-mode-model" class="stats-mode-label">Model (recency-weighted)</label>'
-                  f'<div id="stats-view-raw" class="stats-view">{build_view(stats, "raw")}</div>'
-                  f'<div id="stats-view-model" class="stats-view">{build_view(weighted_stats, "model")}</div>')
-    else:
-        result += build_view(stats, 'raw')
-    return sort_css() + result
+    views = [v for v in views if v['frame'] is not None and not v['frame'].empty]
+    if not views:
+        return '<p class="muted">No pregame league snapshot available.</p>'
+    result = ('<p class="stats-intro">Pregame, observed rates for display: the model standardizes its own copy. '
+              '(#1) is best; tap a header to sort. QB Elo is the starter’s recency-weighted rating; under '
+              'Defense, the average QB faced.</p>')
+    # CSS-only switch -- same :checked~sibling trick as the packet bundle's
+    # tabs, no JS. Radios, labels and views must be flat siblings for ~ to
+    # reach across them; one rule per view shows its panel and its note.
+    radios = ''.join(
+        f'<input type="radio" name="stats-mode" id="stats-mode-{v["key"]}" class="stats-mode-radio"'
+        f'{" checked" if i == 0 else ""}><label for="stats-mode-{v["key"]}" class="stats-mode-label">'
+        f'{escape(v["label"])}</label>' for i, v in enumerate(views))
+    rules = ''.join(f'#stats-mode-{v["key"]}:checked~#stats-view-{v["key"]}{{display:block}}' for v in views)
+    panels = ''.join(f'<div id="stats-view-{v["key"]}" class="stats-view"><p class="stats-note">{escape(v["note"])}</p>'
+                     f'{build_view(v["frame"], v["key"])}</div>' for v in views)
+    return sort_css() + result + f'<style>{rules}</style>' + radios + panels
 
 
 # Longest side of every embedded logo. The source PNGs are 500x500, but no
@@ -1133,67 +1174,150 @@ def weather_details(row):
     return kickoff, {k: v.replace('— mph', '—').replace('— in', '—') for k, v in values.items()}
 
 
-def specs_page(spec, running=None):
-    """The Specs tab: what produced the numbers, and what the pick colours
-    on the sheet actually mean.
+def specs_page(folder):
+    """The Specs tab, built from what the packet folder holds for each market
+    ({market}_config.json, _spec.json, _importance.csv): the models running
+    this week and how their stats are pooled, the pick rules that can fire
+    and their backtest records, the inputs, feature importance, and run
+    details folded away at the bottom. Only what is in use -- buckets of
+    models not running this week are left off."""
+    folder = Path(folder)
 
-    The tier guide leads, because it is the part a reader comes looking
-    for; the rest is model_spec's spec for this run, the same content as
-    the version folder's model.json.
+    def load(name):
+        path = folder / name
+        try:
+            return json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
+        except ValueError:
+            return None
 
-    Nested dictionaries are flattened into one "parent · child" label
-    rather than a definition list inside a definition list -- the spec is
-    three deep in places, and indenting it that far turned a page of
-    facts into a page of structure."""
-    def label(key):
-        return key.replace('_', ' ').capitalize()
+    markets = [m for m in ['spread', 'total'] if (folder / f'{m}_config.json').exists()]
+    configs = {m: load(f'{m}_config.json') or {} for m in markets}
+    specs = {m: load(f'{m}_spec.json') for m in markets}
+    if not markets:
+        return '<p class="muted">No model specs saved for this packet.</p>'
+    label = {'spread': 'Spread', 'total': 'Totals'}
+    first = next((s for s in specs.values() if s), None)
 
-    def leaf(value):
-        if isinstance(value, list):
-            short = all(len(str(v)) < 40 for v in value)
-            return (escape(', '.join(map(str, value))) if short
-                    else '<ul>' + ''.join(f'<li>{escape(str(v))}</li>' for v in value) + '</ul>')
-        return escape(str(value))
+    def card(title, body):
+        return f'<section class="card spec-card"><h2>{escape(title)}</h2>{body}</section>'
 
-    def rows(value, prefix=''):
-        """(label, html) pairs, one per fact, however deep it was nested."""
-        out = []
-        for key, item in value.items():
-            name = f'{prefix} · {label(key)}' if prefix else label(key)
-            if isinstance(item, dict):
-                out.extend(rows(item, name))
-            else:
-                out.append((name, leaf(item)))
-        return out
+    # Models: one row per market, and the methods behind the stat columns.
+    rows, methods = '', {}
+    for m in markets:
+        c, s = configs[m], specs[m] or {}
+        model = c.get('tier_model') or c.get('model', '—')
+        calc = c.get('feature_calculation') or c.get('calculation')
+        methods.setdefault(calc, calculation_text(calc))
+        run = s.get('run', {})
+        rows += (f'<tr><td>{label[m]}</td><td>{escape(model)}</td>'
+                 f'<td>{escape(CALCULATION_NAMES.get(calc, str(calc)))}</td>'
+                 f'<td class="num">{c.get("lookback", "—")} wk</td>'
+                 f'<td class="num">{c.get("train_window", "—")} wk · {run.get("training_games", "—")} games</td>'
+                 f'<td class="num">{run.get("ensemble_members", "—")}</td></tr>')
+    models = ('<table class="spec-table"><thead><tr><th>Market</th><th>Model</th><th>Stats</th><th>Lookback</th>'
+              '<th>Trained on</th><th>Members</th></tr></thead><tbody>' + rows + '</tbody></table>'
+              + ''.join(f'<p class="spec-small"><strong>{escape(CALCULATION_NAMES.get(k, str(k)))}:</strong> '
+                        f'{escape(v)}.</p>' for k, v in methods.items()))
+    if first:
+        models += f'<p class="spec-small">{escape(first.get("predicts", ""))}</p>'
 
-    def section(key, value):
-        body = ('<dl class="spec-list">'
-                + ''.join(f'<dt>{escape(name)}</dt><dd>{html}</dd>' for name, html in rows(value))
-                + '</dl>') if isinstance(value, dict) else f'<p class="spec-prose">{leaf(value)}</p>'
-        return f'<section class="card spec-card"><h2>{escape(label(key))}</h2>{body}</section>'
+    # Picks: the live bucket list for each market's model.
+    picks = ''
+    for m in markets:
+        running = configs[m].get('tier_model') or running_model(folder, m)
+        key = market_key(m, running)
+        spec = PICK_BUCKETS[key]
+        live = [b for b in spec['buckets'] if b['model'] == (running or TIER_MODEL)]
+        body = ''
+        for b in live:
+            tier = tier_band(b['rate'])
+            body += (f'<tr><td><span class="tier-chip" style="background:{TIER_COLORS[tier]}">{tier}</span></td>'
+                     f'<td>{escape(b["rule"])}</td><td class="num">{100 * b["rate"]:.1f}% · {b["n"]}</td>'
+                     f'<td>{escape(b["worth"])}</td><td class="num">{escape(b["eras"])}</td></tr>')
+        skip = NO_PICK.get(key)
+        if skip and skip['model'] == (running or TIER_MODEL):
+            body += (f'<tr><td><span class="tier-chip tier-chip-none">–</span></td><td>{escape(skip["rule"])}</td>'
+                     f'<td class="num">{escape(skip["record"])}</td><td>{escape(skip["worth"])}</td>'
+                     f'<td class="num">{escape(skip["eras"])}</td></tr>')
+        notes = ''.join(f'<p><strong>{escape(b["rule"].capitalize())}.</strong> {escape(b["note"])}</p>' for b in live)
+        picks += (f'<h3 class="spec-sub">{label[m]} · {escape(running or "—")} · edge ≥ {spec["edge"]:g}</h3>'
+                  + ('<table class="spec-table"><thead><tr><th></th><th>Rule</th><th>Hit · n</th><th>Worth</th>'
+                     '<th>By era</th></tr></thead><tbody>' + body + '</tbody></table>' if live else
+                     '<p class="spec-small">No buckets for this model — no picks.</p>')
+                  + (f'<details><summary>Why these rules</summary>{notes}</details>' if notes else ''))
+    bands = ', '.join(f'{tier} {BAND_LABELS[tier]}' for tier, _ in TIER_BANDS)
+    picks += (f'<p class="spec-small">Tier = the rule’s backtested hit rate ({bands}). Break-even at -110 is 52.4%; '
+              '– rows are not bets. By era: the backtest cut into four blocks of seasons, oldest first.</p>')
 
-    model = spec['model']
-    head = (f'<h1>{escape(model["name"])} {escape(model["version"])}</h1>'
-            f'<p class="report-date">Code {escape(model["code"])} · generated {escape(model["generated"])} · '
-            'also saved as ../model.json</p>')
-    return (head + tier_guide(running, standalone=True)
-            + ''.join(section(key, value) for key, value in spec.items() if key != 'model'))
+    # Inputs, from the spec of the model behind each market (they match today).
+    inputs = ''
+    if first:
+        i = first['inputs']
+        team = i['team_stats']
+        inputs = ('<table class="spec-table"><tbody>'
+                  f'<tr><td>Team stats</td><td>{escape(", ".join(team["metrics"]))} — {escape(team["per_team_row"])}; '
+                  f'{escape(team["opponent_adjustment"])}</td></tr>'
+                  f'<tr><td>QB Elo</td><td>{escape(team["qb_elo"])}</td></tr>'
+                  f'<tr><td>Weather</td><td>{escape(", ".join({"feels_like_f": "feels-like °F", "wind_mph": "wind mph", "precip_inches": "precipitation in"}.get(w, pretty(w)) for w in i["weather"]["inputs"]))}; '
+                  f'{escape(i["weather"]["indoor_games"])}</td></tr>'
+                  + ''.join(f'<tr><td>{escape(k.replace("_", " ").capitalize())}</td><td>{escape(v)}</td></tr>'
+                            for k, v in i['context'].items())
+                  + f'<tr><td>Network</td><td>{i["network_input_count"]} inputs; '
+                    f'{escape(first["network"]["layers"])}</td></tr></tbody></table>')
+
+    # Feature importance: one chart per distinct model.
+    groups = {}
+    for m in markets:
+        if (folder / f'{m}_importance.csv').exists():
+            groups.setdefault(configs[m].get('tier_model') or m, []).append(m)
+    charts = ''
+    for model, ms in groups.items():
+        table = pd.read_csv(folder / f'{ms[0]}_importance.csv').sort_values('importance', ascending=False)
+        table['feature'] = table.feature.map(pretty)
+        charts += (f'<div><h3 class="spec-sub">{escape(" + ".join(label[x] for x in ms) + " · " + model)}</h3>'
+                   f'<div class="importance-scroll">{importance_bars(table)}</div></div>')
+    method = next((c.get('importance_note') for c in configs.values() if c.get('importance_note')), '')
+    importance = (f'<div class="spec-imp">{charts}</div>'
+                  + (f'<p class="spec-small">{escape(method)}</p>' if method else '')) if charts else ''
+
+    # Run details: training spans, data freshness, network, per market.
+    details = ''
+    for m in markets:
+        s = specs[m]
+        if not s:
+            continue
+        run = s['run']
+        details += (f'<p><strong>{label[m]}:</strong> trained {escape(run["training_span"])} '
+                    f'({run["training_games"]} games), {run["ensemble_members"]} members × {run["epochs"]} epochs, '
+                    f'seeds from {run["seed"]}.</p>')
+    if first:
+        details += ''.join(f'<p><strong>{escape(k.replace("_", " ").capitalize())}:</strong> {escape(str(v))}</p>'
+                           for k, v in first['data'].items())
+        details += f'<p><strong>Network:</strong> {escape(first["network"]["context_layer"])}; ' \
+                   f'{escape(first["network"]["optimizer"])}.</p>'
+    head = ''
+    if first:
+        head = (f'<h1>Specs</h1><p class="report-date">Code {escape(first["model"]["code"])} · generated '
+                f'{escape(first["model"]["generated"])} · full spec in models.json</p>')
+    return (head + card('Models this week', models) + card('Pick rules', picks)
+            + (card('Inputs', inputs) if inputs else '')
+            + (card('Feature importance', importance) if importance else '')
+            + (f'<section class="card spec-card"><details><summary>Run details</summary>{details}</details></section>'
+               if details else ''))
 
 
 def packet_tabs(active):
     return '<nav class="packet-tabs" aria-label="Weekly report">' + ''.join(
         f'<a href="{path}"{""" aria-current="page" """ if key == active else ""}>{label}</a>'
         for key, path, label in [('headline', 'index.html', 'Headline'), ('spread', 'spread.html', 'Spread'),
-                                ('total', 'total.html', 'Totals'), ('importance', 'importance.html', 'Feature importance'),
-                                ('stats', 'stats.html', 'Stats'), ('specs', 'specs.html', 'Specs')]) + '</nav>'
+                                ('total', 'total.html', 'Totals'), ('stats', 'stats.html', 'Stats'), ('specs', 'specs.html', 'Specs')]) + '</nav>'
 
 
 def bundle_single_file(folder):
     """Bundle embedded pages, assets and downloads into one portable report."""
     folder = Path(folder)
     pages = [('headline', 'Headline', 'index.html'), ('spread', 'Spread', 'spread.html'),
-             ('total', 'Totals', 'total.html'), ('importance', 'Feature importance', 'importance.html'),
-             ('stats', 'Stats', 'stats.html'), ('specs', 'Specs', 'specs.html')]
+             ('total', 'Totals', 'total.html'), ('stats', 'Stats', 'stats.html'), ('specs', 'Specs', 'specs.html')]
     tabs, panels, title = [], [], 'Weekly packet'
     for key, label, name in pages:
         path = folder / name
@@ -2163,14 +2287,6 @@ def write_packets(predictions, panel, importance, config, root):
     for (season, week), games in predictions.groupby(['season', 'week']):
         shared = config['calculation'] in ['shared-scoring-v1', 'joint-matchup-v1', 'two-sided-team-points-v1', model_spec.ID]
         snapshot = display_stats(season, week, config['lookback']) if market == 'spread' or shared else pd.DataFrame()
-        # The Stats tab's "Model" view uses the recency preset the model was
-        # actually built with (config['feature_calculation'], set by
-        # two_sided_packet; 'steep' for runs from before it was recorded).
-        # Scoped to this model family rather than guessed at for others.
-        weighted_snapshot = (display_stats(season, week, config['lookback'],
-                                           calculation=config.get('feature_calculation', 'steep'))
-                             if config['calculation'] in ('two-sided-team-points-v1', model_spec.ID)
-                             and not snapshot.empty else None)
         folder = root / f'{int(season)}_{int(week):02d}'
         folder.mkdir(parents=True, exist_ok=True)
         # Cards in kickoff order, not whatever order the panel happened to
@@ -2265,46 +2381,36 @@ def write_packets(predictions, panel, importance, config, root):
             notes.append(('How the bars work', 'Each bar is one input’s share of this game’s prediction relative to the '
                                                f'model’s baseline. {config.get("baseline_note", "")}'.strip()))
         notes.append(('Caveat', 'Bars explain the model’s prediction, not what causes games to turn out a certain way.'))
-        # Full set, not just the top 12 -- scrollable container keeps the
-        # page from turning into one giant bar chart while still letting
-        # you page through every feature, not just the headline few.
-        table = importance.copy()
-        table['feature'] = table.feature.map(pretty)
-        note = config.get('importance_note', 'Each bar is a paired refit/drop test: remove one feature, retrain, '
-                          'and see how prediction error on the training sample changed. Positive means removing '
-                          'that feature made the model worse (it was pulling weight); negative means removing it '
-                          'made the model better (it was actively hurting predictions). This is a discovery '
-                          'diagnostic on the training sample, not held-out betting evidence, and because many '
-                          'features are correlated with each other, one can substitute for another -- a low score '
-                          "doesn't mean a feature is useless, just that something else already covers it.")
-        fi = (f'<section class="card"><h2>Feature importance</h2><details><summary>Method</summary>{escape(note)}</details>'
-             + f'<div class="importance-scroll">{importance_bars(table)}</div></section>')
-        if config['calculation'] == 'shared-scoring-v1' and config.get('attribution_schema', 0) < 2:
-            fi = '<p class="warn">Saved feature-importance labels also require regeneration. They are hidden until the shared-scoring preview is rerun.</p>'
+        # The method note rides in the saved config: the Specs tab shows it
+        # under the importance charts (there is no separate tab any more).
+        saved = {k: v for k, v in config.items() if k != 'spec'}
+        saved.setdefault('importance_note', 'Each bar is a paired refit/drop test: remove one feature, retrain, '
+                         'and see how training error changed. Positive means the feature was pulling weight. A '
+                         'training-sample diagnostic, not held-out evidence; correlated features can stand in '
+                         'for each other.')
         games.to_csv(folder / f'{market}_details.csv', index=False)
         importance.to_csv(folder / f'{market}_importance.csv', index=False)
-        (folder / f'{market}_config.json').write_text(json.dumps({k: v for k, v in config.items() if k != 'spec'}, indent=2),
-                                                     encoding='utf-8')
+        (folder / f'{market}_config.json').write_text(json.dumps(saved, indent=2), encoding='utf-8')
+        if config.get('spec'):
+            (folder / f'{market}_spec.json').write_text(json.dumps(config['spec'], indent=2, default=str),
+                                                       encoding='utf-8')
         footer = ('<details class="sheet-notes"><summary>Notes</summary>'
                   + ''.join(f'<p><strong>{escape(title)}.</strong> {escape(text)}</p>' for title, text in notes) + '</details>')
         (folder / f'{market}.html').write_text(page(title, header + ''.join(cards) + footer, 'packet'), encoding='utf-8')
-        (folder / f'{market}_importance.html').write_text(fi, encoding='utf-8')
-        evidence = ''.join(f'<h2>{name.title()}</h2>' + (folder / f'{name}_importance.html').read_text()
-                           for name in ['spread', 'total'] if (folder / f'{name}_importance.html').exists())
-        (folder / 'importance.html').write_text(page(title, packet_tabs('importance') + evidence, 'packet'), encoding='utf-8')
         headline = (f'<h1>Model</h1><p class="report-date">{int(season)} · Week {int(week)}</p>'
                    + copy_picks_widget(season, week, headline_table(folder, light=True, guide=False))
                    + headline_table(folder))
         (folder / 'index.html').write_text(
             page(title, packet_tabs('headline') + headline, 'packet headline-shell sheet-page'), encoding='utf-8')
+        # Both tabs cover every market written to this folder so far -- the
+        # packet calls this once per market, and the last call sees them all.
+        saved_configs = {m: json.loads((folder / f'{m}_config.json').read_text(encoding='utf-8'))
+                         for m in ['spread', 'total'] if (folder / f'{m}_config.json').exists()}
+        views = stats_views(season, week, saved_configs) if (market == 'spread' or shared) else []
         (folder / 'stats.html').write_text(page(title, packet_tabs('stats') + '<h1>Stats</h1>'
-            + stats_tables(snapshot, games, season, week, config['lookback'], weighted_snapshot), 'packet headline-shell'), encoding='utf-8')
-        if config.get('spec'):
-            (folder / 'specs.html').write_text(
-                page(title, packet_tabs('specs')
-                     + specs_page(config['spec'],
-                                  {m: running_model(folder, m) for m in ['spread', 'total']}), 'packet'),
-                                               encoding='utf-8')
+            + stats_tables(views, games), 'packet headline-shell'), encoding='utf-8')
+        (folder / 'specs.html').write_text(page(title, packet_tabs('specs') + specs_page(folder), 'packet'),
+                                           encoding='utf-8')
         for missing in ['spread', 'total']:
             if not (folder / f'{missing}.html').exists():
                 (folder / f'{missing}.html').write_text(page(title, packet_tabs(missing) +
@@ -2482,6 +2588,12 @@ def refresh_packet(season, week, lookback=20, symmetric=False, shared=False):
 
 if __name__ == '__main__':
     import argparse
+    import faulthandler
+    import os
+    # If Python itself crashes (a segfault, not an exception), print where.
+    # The env var carries it into the crunch and training workers too.
+    faulthandler.enable(all_threads=True)
+    os.environ.setdefault('PYTHONFAULTHANDLER', '1')
     parser = argparse.ArgumentParser(description=f'Build a weekly packet by fitting the chosen model -- '
                                      f'{model_spec.LABEL} writes to {model_spec.RESULTS}/{{season}}_{{week}}_{{lookback}}/ '
                                      'with a model.json spec.')

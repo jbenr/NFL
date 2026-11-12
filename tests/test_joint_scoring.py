@@ -70,7 +70,7 @@ class JointTests(unittest.TestCase):
             self.assertIn('ARI defense', html)
             self.assertIn('Implied score', html)
             self.assertIn('Test context availability note', html)
-            self.assertTrue((Path(directory) / '2026_01' / 'importance.html').exists())
+            self.assertIn('Feature importance', (Path(directory) / '2026_01' / 'specs.html').read_text())
 
     def test_swap_symmetry_and_cross_matchup_awareness(self):
         from modelo_workers import initialize_worker

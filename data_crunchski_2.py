@@ -1129,14 +1129,32 @@ def prep_test_train(szn, week, lookback, *, history_weeks=None, calculation='mea
         # Each worker rebuilds its pbp index once via the initializer, so the big
         # frames are never pickled -- only (season, week) goes out per task and a
         # ~30-row result comes back.
+        #
+        # A worker can die outright (this env segfaults at random inside
+        # pandas -- see memory note "intermittent segfault"), which breaks the
+        # whole pool. Every finished week is already saved to the
+        # weekly_features cache by the worker itself, so start a fresh pool
+        # and go again: done weeks load from cache in a blink, and only the
+        # unfinished ones are recomputed. This is what "run it a second time"
+        # was doing by hand.
         ctx = multiprocessing.get_context("forkserver")
-        with concurrent.futures.ProcessPoolExecutor(
-                max_workers=num_workers,
-                mp_context=ctx,
-                initializer=_init_worker,
-                initargs=(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling, leverage)) as executor:
-            results = list(tqdm(executor.map(_calc_week, tings),
-                                total=len(tings), desc="Crunching the numbers"))
+        attempts = int(os.environ.get("NFL_CRUNCH_RETRIES") or 4)
+        for attempt in range(1, attempts + 1):
+            try:
+                with concurrent.futures.ProcessPoolExecutor(
+                        max_workers=num_workers,
+                        mp_context=ctx,
+                        initializer=_init_worker,
+                        initargs=(seasons, sched, df, lookback, calculation, pbp_columns, use_scaling,
+                                  leverage)) as executor:
+                    results = list(tqdm(executor.map(_calc_week, tings),
+                                        total=len(tings), desc="Crunching the numbers"))
+                break
+            except concurrent.futures.process.BrokenProcessPool:
+                if attempt == attempts:
+                    raise
+                print(f"\n  ⚠️ a crunch worker crashed (attempt {attempt} of {attempts}); "
+                      "restarting the pool -- finished weeks reload from cache", flush=True)
 
     data = pd.concat(results).reset_index(drop=True)
     utils.save_parquet(data, cached)
